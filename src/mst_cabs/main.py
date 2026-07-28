@@ -1,7 +1,14 @@
 import sys
 import os
+import builtins
+
 # Ensure Python can find the 'mst_cabs' package inside the 'src' directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Force all print statements to flush instantly, bypassing cloud buffering delays
+def print(*args, **kwargs):
+    kwargs.setdefault('flush', True)
+    builtins.print(*args, **kwargs)
 
 import time
 import json
@@ -91,13 +98,15 @@ def run_bot():
                             booking_creation_time = datetime.now(ist_tz).strftime("%d-%m-%Y %I:%M %p")
                             
                             def flatten_data(value):
-                                if value is None:
-                                    return ""
+                                if value is None or str(value).strip() == "":
+                                    return "Not Given"
                                 if isinstance(value, str):
                                     return value
                                 if isinstance(value, list):
+                                    if not value: return "Not Given"
                                     return " | ".join(flatten_data(v) for v in value)
                                 if isinstance(value, dict):
+                                    if not value: return "Not Given"
                                     return ", ".join(f"{flatten_data(v)}" for k, v in value.items())
                                 return str(value)
                             
