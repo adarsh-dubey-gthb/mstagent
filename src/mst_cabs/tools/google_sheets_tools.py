@@ -66,6 +66,7 @@ def get_cloud_uid() -> int:
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
+        client = gspread.authorize(creds)
         # SECURITY PATCH: Use exact cryptographic Sheet ID if provided, otherwise fallback to title
         sheet_id = os.getenv("GOOGLE_SHEET_ID")
         if sheet_id:
