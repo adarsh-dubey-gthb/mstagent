@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "mst_cabs"
+version = "0.1.0"
+description = "Cab Booking Agent powered by CrewAI"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<=3.13"
+crewai = "^0.36.0"
+python-dotenv = "^1.0.0"
+openpyxl = "^3.1.2"
+litellm = "^1.41.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

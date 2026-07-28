@@ -1,0 +1,12 @@
+# Secret Files (NEVER UPLOAD THESE TO THE INTERNET!)
+.env
+credentials.json
+
+# Tracker Files
+last_email_uid.txt
+
+# Python Virtual Environments & Cache
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/

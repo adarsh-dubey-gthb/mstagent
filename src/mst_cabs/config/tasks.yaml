@@ -1,0 +1,31 @@
+extract_booking_task:
+  description: >
+    Here is the content of the newest email:
+    {email_content}
+    
+    CRITICAL INSTRUCTION: First, evaluate if this email is a legitimate cab/vehicle booking request.
+    If the email is a newsletter, spam, internal company chatter, or general conversation, you MUST set the JSON key "is_cab_booking" to false, and you can leave the other fields blank.
+    
+    If it IS a legitimate cab booking request, set "is_cab_booking" to true, and extract the following details:
+       - Booked By (Who sent or requested this on behalf of the customer, if specified)
+       - Customer Name (The actual passenger)
+       - Pickup Location
+       - Drop-off Location
+       - Date and Time
+       - Pickup Type (e.g., full day, specific time, airport drop)
+       - Cars Required (e.g., Sedan, SUV, specific model)
+       - Contact Info (from the sender)
+       - Special Details (Any extra remarks, special instructions, or notes)
+       - Billing To (Which company or account to bill this to, if specified)
+       - State (The state of the travel, e.g. Uttar Pradesh, Delhi)
+       - City (The city of the travel, e.g. Noida, Delhi)
+
+    CRITICAL INSTRUCTION: The values for ALL keys in the JSON must be simple, flat Strings. 
+    DO NOT use nested lists `[]` or nested dictionaries `{}` inside the values.
+    If there are multiple dates, locations, or phone numbers, combine them into a single string separated by commas or "and" (e.g. "30th July and 31st July").
+
+    Return EXACTLY a valid JSON object with the keys:
+    "is_cab_booking", "booked_by", "customer_name", "pickup", "dropoff", "date_time", "pickup_type", "cars_required", "contact_info", "special_details", "billing_to", "state", "city".
+  expected_output: >
+    A valid JSON object containing the extracted data and the "is_cab_booking" boolean.
+  agent: email_parser_agent
