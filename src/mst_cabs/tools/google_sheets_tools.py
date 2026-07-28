@@ -20,11 +20,14 @@ def append_to_google_sheet(customer_name: str, pickup: str, dropoff: str, date_t
         client = gspread.authorize(creds)
         
         # 2. Open the spreadsheet by name
-        sheet_name = "Master Cab Bookings"
+        sheet_id = os.getenv("GOOGLE_SHEET_ID")
         try:
-            workbook = client.open(sheet_name)
+            if sheet_id:
+                workbook = client.open_by_key(sheet_id)
+            else:
+                workbook = client.open("Master Cab Bookings")
         except gspread.exceptions.SpreadsheetNotFound:
-            return f"CRITICAL ERROR: Could not find a Google Sheet named '{sheet_name}'. Did you share it with the service account email?"
+            return f"CRITICAL ERROR: Could not find the Google Sheet. Did you share it with the service account email?"
             
         sheet = workbook.sheet1
         
@@ -63,8 +66,12 @@ def get_cloud_uid() -> int:
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
-        client = gspread.authorize(creds)
-        workbook = client.open("Master Cab Bookings")
+        # SECURITY PATCH: Use exact cryptographic Sheet ID if provided, otherwise fallback to title
+        sheet_id = os.getenv("GOOGLE_SHEET_ID")
+        if sheet_id:
+            workbook = client.open_by_key(sheet_id)
+        else:
+            workbook = client.open("Master Cab Bookings")
         
         try:
             settings_sheet = workbook.worksheet("Settings")
@@ -87,7 +94,13 @@ def set_cloud_uid(uid: int):
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
         client = gspread.authorize(creds)
-        workbook = client.open("Master Cab Bookings")
+        # SECURITY PATCH: Use exact cryptographic Sheet ID if provided, otherwise fallback to title
+        sheet_id = os.getenv("GOOGLE_SHEET_ID")
+        if sheet_id:
+            workbook = client.open_by_key(sheet_id)
+        else:
+            workbook = client.open("Master Cab Bookings")
+            
         settings_sheet = workbook.worksheet("Settings")
         settings_sheet.update_acell('B1', str(uid))
     except Exception as e:

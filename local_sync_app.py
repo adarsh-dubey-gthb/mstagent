@@ -17,8 +17,12 @@ def sync_from_google_sheets():
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
-        client = gspread.authorize(creds)
-        sheet = client.open("Master Cab Bookings").sheet1
+        # SECURITY PATCH: Use exact cryptographic Sheet ID if provided, otherwise fallback to title
+        sheet_id = os.getenv("GOOGLE_SHEET_ID")
+        if sheet_id:
+            sheet = client.open_by_key(sheet_id).sheet1
+        else:
+            sheet = client.open("Master Cab Bookings").sheet1
     except Exception as e:
         print(f"Could not connect to Google Sheets: {e}")
         return
