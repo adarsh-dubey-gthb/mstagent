@@ -17,8 +17,8 @@ extract_booking_task:
        - Contact Info (from the sender)
        - Special Details (Any extra remarks, special instructions, or notes)
        - Billing To (Which company or account to bill this to, if specified)
-       - State (The state of the travel, e.g. Uttar Pradesh, Delhi)
-       - City (The city of the travel, e.g. Noida, Delhi)
+       - State (You must use your geographical knowledge to infer the correct Indian State based on the City. HOWEVER, if the city name exists in multiple states or you are confused, leave this strictly blank!)
+       - City (The city of the travel, e.g. Noida, Bangalore)
 
     CRITICAL INSTRUCTION: The values for ALL keys in the JSON must be simple, flat Strings. 
     DO NOT use nested lists `[]` or nested dictionaries `{}` inside the values.
