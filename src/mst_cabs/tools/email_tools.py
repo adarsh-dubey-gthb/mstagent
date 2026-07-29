@@ -72,10 +72,18 @@ def read_godaddy_emails(query: str = "ALL"):
                     body = msg.get_payload(decode=True).decode(errors='ignore')
                 
                 import re
-                # Aggressively strip out HTML tags to save hundreds of AI tokens!
+                # PRESERVE TABLE STRUCTURE FOR BATCH BOOKINGS
+                body = re.sub(r'<br\s*/?>', '\n', body, flags=re.IGNORECASE)
+                body = re.sub(r'</tr>', '\n', body, flags=re.IGNORECASE)
+                body = re.sub(r'</p>', '\n', body, flags=re.IGNORECASE)
+                body = re.sub(r'</td>', ' | ', body, flags=re.IGNORECASE)
+                
+                # Strip out all remaining HTML tags
                 body = re.sub(r'<[^>]+>', ' ', body)
-                # Remove excessive blank lines and spaces
-                body = re.sub(r'\s+', ' ', body).strip()
+                
+                # Remove excessive blank spaces but preserve newlines
+                body = re.sub(r'[ \t]+', ' ', body)
+                body = re.sub(r'\n\s*\n', '\n', body).strip()
                 
                 # Reduce max characters to 2500 to prevent edge-case data loss
                 if len(body) > 2500:
