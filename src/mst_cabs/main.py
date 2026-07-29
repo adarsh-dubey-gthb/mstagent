@@ -73,21 +73,31 @@ def run_bot():
                     try:
                         # Clean up potential markdown formatting like ```json ... ```
                         json_str = result.strip()
-                        json_match = re.search(r'\{.*\}', json_str, re.DOTALL)
-                        if json_match:
-                            json_str = json_match.group(0)
+                        
+                        # First try to match a JSON array, fallback to JSON object
+                        if re.search(r'\[.*\]', json_str, re.DOTALL):
+                            json_str = re.search(r'\[.*\]', json_str, re.DOTALL).group(0)
+                        elif re.search(r'\{.*\}', json_str, re.DOTALL):
+                            json_str = re.search(r'\{.*\}', json_str, re.DOTALL).group(0)
                             
                         import json_repair
-                        data = json_repair.loads(json_str)
+                        data_list = json_repair.loads(json_str)
                         
-                        # Check the strict boolean spam filter
-                        is_booking = data.get("is_cab_booking")
+                        # Fallback: if AI disobeyed and returned a single dict instead of a list, wrap it
+                        if isinstance(data_list, dict):
+                            data_list = [data_list]
+                            
+                        if not data_list:
+                            raise Exception("AI returned empty JSON array")
+                        
+                        # Check the strict boolean spam filter on the first object
+                        is_booking = data_list[0].get("is_cab_booking")
                         
                         if is_booking is False or str(is_booking).lower() == "false":
                             print("\n[-] Irrelevant email skipped (AI marked it as spam/newsletter).")
                             set_last_uid(current_uid) # Mark as successfully processed (spam)
                         else:
-                            print("\n[+] Extraction successful! Pushing to Google Sheets Cloud Database...")
+                            print(f"\n[+] Extraction successful! Found {len(data_list)} distinct booking(s). Pushing to Google Sheets...")
                             from mst_cabs.tools.google_sheets_tools import append_to_google_sheet
                             from datetime import datetime
                             import zoneinfo
@@ -110,29 +120,35 @@ def run_bot():
                                     return ", ".join(f"{flatten_data(v)}" for k, v in value.items())
                                 return str(value)
                             
-                            save_status = append_to_google_sheet(
-                                customer_name=flatten_data(data.get('customer_name', '')),
-                                pickup=flatten_data(data.get('pickup', '')),
-                                dropoff=flatten_data(data.get('dropoff', '')),
-                                date_time=flatten_data(data.get('date_time', '')),
-                                booking_creation_time=booking_creation_time,
-                                contact_info=flatten_data(data.get('contact_info', '')),
-                                pickup_type=flatten_data(data.get('pickup_type', '')),
-                                cars_required=flatten_data(data.get('cars_required', '')),
-                                booked_by=flatten_data(data.get('booked_by', '')),
-                                special_details=flatten_data(data.get('special_details', '')),
-                                billing_to=flatten_data(data.get('billing_to', '')),
-                                state=flatten_data(data.get('state', '')),
-                                city=flatten_data(data.get('city', ''))
-                            )
-                            
-                            # SAFETY CHECK: If Google Sheets fails, we MUST crash this block so it doesn't save the UID!
-                            if "CRITICAL ERROR" in save_status:
-                                raise Exception(save_status)
+                            for i, data in enumerate(data_list):
+                                print(f"  -> Saving booking {i+1} of {len(data_list)}...")
+                                save_status = append_to_google_sheet(
+                                    customer_name=flatten_data(data.get('customer_name', '')),
+                                    pickup=flatten_data(data.get('pickup', '')),
+                                    dropoff=flatten_data(data.get('dropoff', '')),
+                                    date_time=flatten_data(data.get('date_time', '')),
+                                    booking_creation_time=booking_creation_time,
+                                    contact_info=flatten_data(data.get('contact_info', '')),
+                                    pickup_type=flatten_data(data.get('pickup_type', '')),
+                                    cars_required=flatten_data(data.get('cars_required', '')),
+                                    booked_by=flatten_data(data.get('booked_by', '')),
+                                    special_details=flatten_data(data.get('special_details', '')),
+                                    billing_to=flatten_data(data.get('billing_to', '')),
+                                    state=flatten_data(data.get('state', '')),
+                                    city=flatten_data(data.get('city', ''))
+                                )
                                 
-                            print(save_status)
+                                # SAFETY CHECK: If Google Sheets fails, we MUST crash this block!
+                                if "CRITICAL ERROR" in save_status:
+                                    raise Exception(f"Google Sheets API Error on Booking {i+1}: {save_status}")
+                                    
+                                print(f"     {save_status}")
+                                
+                                # If there are more bookings in the array, wait 2 seconds to avoid API rate limits
+                                if i < len(data_list) - 1:
+                                    time.sleep(2)
                             
-                            # ONLY increase the count if it successfully reaches the end!
+                            # ONLY increase the count if ALL bookings successfully saved!
                             set_last_uid(current_uid)
                             print(f"[SUCCESS] Email UID {current_uid} fully processed and marked as complete.")
                             

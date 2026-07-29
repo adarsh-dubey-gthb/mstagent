@@ -20,12 +20,14 @@ extract_booking_task:
        - State (You must use your geographical knowledge to infer the correct Indian State based on the City. HOWEVER, if the city name exists in multiple states or you are confused, leave this strictly blank!)
        - City (The city of the travel, e.g. Noida, Bangalore)
 
-    CRITICAL INSTRUCTION: The values for ALL keys in the JSON must be simple, flat Strings. 
+    CRITICAL INSTRUCTION: The output MUST be a valid JSON Array `[]` containing one or more JSON Objects `{}`.
+    Each object in the array represents ONE distinct cab booking found in the email.
+    If the email contains only 1 booking, return an array with 1 object. If it contains 3 bookings, return an array with 3 distinct objects.
+    The values for ALL keys inside each JSON object must be simple, flat Strings. 
     DO NOT use nested lists `[]` or nested dictionaries `{}` inside the values.
-    If there are multiple dates, locations, or phone numbers, combine them into a single string separated by commas or "and" (e.g. "30th July and 31st July").
 
-    Return EXACTLY a valid JSON object with the keys:
+    Return EXACTLY a valid JSON array `[...]` containing objects with the keys:
     "is_cab_booking", "booked_by", "customer_name", "pickup", "dropoff", "date_time", "pickup_type", "cars_required", "contact_info", "special_details", "billing_to", "state", "city".
   expected_output: >
-    A valid JSON object containing the extracted data and the "is_cab_booking" boolean.
+    A valid JSON Array containing one or more objects with the extracted data and the "is_cab_booking" boolean.
   agent: email_parser_agent
