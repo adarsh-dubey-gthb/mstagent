@@ -19,7 +19,9 @@ def read_godaddy_emails(query: str = "ALL"):
     Returns a tuple: (email_text, target_uid)
     """
     try:
-        mail = imaplib.IMAP4_SSL(os.getenv("IMAP_SERVER", "outlook.office365.com"))
+        imap_host = os.getenv("IMAP_SERVER", "outlook.office365.com")
+        imap_port = int(os.getenv("IMAP_PORT", 993))
+        mail = imaplib.IMAP4_SSL(host=imap_host, port=imap_port)
         mail.login(os.getenv("EMAIL_ACCOUNT"), os.getenv("EMAIL_PASSWORD"))
         mail.select('inbox')
         
@@ -102,7 +104,9 @@ def check_new_emails(query: str = "ALL") -> bool:
     Checks if there are any new emails with a UID greater than our last processed UID.
     """
     try:
-        mail = imaplib.IMAP4_SSL(os.getenv("IMAP_SERVER", "outlook.office365.com"))
+        imap_host = os.getenv("IMAP_SERVER", "outlook.office365.com")
+        imap_port = int(os.getenv("IMAP_PORT", 993))
+        mail = imaplib.IMAP4_SSL(host=imap_host, port=imap_port)
         mail.login(os.getenv("EMAIL_ACCOUNT"), os.getenv("EMAIL_PASSWORD"))
         mail.select('inbox')
         
