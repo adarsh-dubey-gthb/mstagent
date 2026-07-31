@@ -1,5 +1,6 @@
 # Core AI Framework - exact version matching local environment
 crewai==1.15.6
+litellm==1.93.0
 
 # LLM Provider
 groq
