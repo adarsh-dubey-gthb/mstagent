@@ -34,7 +34,23 @@ def append_to_google_sheet(customer_name: str, pickup: str, dropoff: str, date_t
         # 3. Check if headers exist, if not, create them
         first_row = sheet.row_values(1)
         if not first_row:
-            headers = ["Booking Number", "Pickup Date & Time", "Booking Creation Time", "Booked By", "Customer Name", "Pickup Location", "Drop-off Location", "Pickup Type", "Cars Required", "Contact Info", "Special Details", "Billing To", "State", "City"]
+            headers = [
+                "Booking Number",
+                "Booked By",
+                "Customer Name",
+                "Contact Info",
+                "Pickup Date",
+                "Pickup Time",
+                "Booking Creation Time",
+                "Pickup Location",
+                "Drop-off Location",
+                "State",
+                "City",
+                "Pickup Type",
+                "Cars Required",
+                "Special Details",
+                "Billing To"
+            ]
             sheet.append_row(headers)
             time.sleep(1) # Small delay to ensure Google registers the row
         
@@ -45,8 +61,31 @@ def append_to_google_sheet(customer_name: str, pickup: str, dropoff: str, date_t
         if booking_number == "0":
             booking_number = "1"
             
-        # 5. Append the data!
-        data = [booking_number, date_time, booking_creation_time, booked_by, customer_name, pickup, dropoff, pickup_type, cars_required, contact_info, special_details, billing_to, state, city]
+        # Split date_time into two separate columns (Date and Time)
+        # date_time might be like "5th August 6AM" or "2026-08-05 06:00"
+        # We split on the last space to separate time from date
+        date_time_parts = date_time.strip().rsplit(' ', 1)
+        pickup_date = date_time_parts[0] if len(date_time_parts) > 1 else date_time
+        pickup_time = date_time_parts[1] if len(date_time_parts) > 1 else "Not Given"
+        
+        # 5. Append the data in the new column order!
+        data = [
+            booking_number,
+            booked_by,
+            customer_name,
+            contact_info,
+            pickup_date,
+            pickup_time,
+            booking_creation_time,
+            pickup,
+            dropoff,
+            state,
+            city,
+            pickup_type,
+            cars_required,
+            special_details,
+            billing_to
+        ]
         
         # Google Sheets crashes if we try to insert a Python list or dictionary into a single cell.
         # Sometimes the AI extracts multiple locations as a JSON list, so we must force everything to be a string!
