@@ -23,7 +23,7 @@ class MstCabsCrew():
     tasks_config = 'config/tasks.yaml'
     
     # Define the Groq LLM
-    llm = "groq/llama-3.1-8b-instant"
+    llm = "groq/llama-3.3-70b-versatile"
 
     @agent
     def email_parser_agent(self) -> Agent:

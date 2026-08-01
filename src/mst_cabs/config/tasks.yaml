@@ -2,32 +2,113 @@ extract_booking_task:
   description: >
     Here is the content of the newest email:
     {email_content}
-    
-    CRITICAL INSTRUCTION: First, evaluate if this email is a legitimate cab/vehicle booking request.
-    If the email is a newsletter, spam, internal company chatter, or general conversation, you MUST set the JSON key "is_cab_booking" to false, and you can leave the other fields blank.
-    
-    If it IS a legitimate cab booking request, set "is_cab_booking" to true, and extract the following details:
-       - Booked By (Who sent or requested this on behalf of the customer, if specified)
-       - Customer Name (The actual passenger)
-       - Pickup Location
-       - Drop-off Location
-       - Date and Time
-       - Pickup Type (e.g., full day, specific time, airport drop)
-       - Cars Required (e.g., Sedan, SUV, specific model)
-       - Contact Info (from the sender)
-       - Special Details (Any extra remarks, special instructions, or notes)
-       - Billing To (Which company or account to bill this to, if specified)
-       - State (You must use your geographical knowledge to infer the correct Indian State based on the City. HOWEVER, if the city name exists in multiple states or you are confused, leave this strictly blank!)
-       - City (The city of the travel, e.g. Noida, Bangalore)
 
-    CRITICAL INSTRUCTION: The output MUST be a valid JSON Array `[]` containing one or more JSON Objects `{}`.
-    Each object in the array represents ONE distinct cab booking found in the email.
-    If the email contains only 1 booking, return an array with 1 object. If it contains 3 bookings, return an array with 3 distinct objects.
-    The values for ALL keys inside each JSON object must be simple, flat Strings. 
-    DO NOT use nested lists `[]` or nested dictionaries `{}` inside the values.
+    STEP 1 — SPAM CHECK: If this is a newsletter, spam, internal chatter, or not a real cab
+    booking request, set "is_cab_booking" to false and leave other fields blank. Otherwise
+    set it to true and continue.
 
-    Return EXACTLY a valid JSON array `[...]` containing objects with the keys:
-    "is_cab_booking", "booked_by", "customer_name", "pickup", "dropoff", "date_time", "pickup_type", "cars_required", "contact_info", "special_details", "billing_to", "state", "city".
+    STEP 2 — READ THE EMAIL: The email may be plain sentences OR a table (columns separated
+    by spaces/tabs/pipes, or an HTML table). If it's a table, read each row by matching cells
+    to their column header, not by position. Each row is usually one guest. If a row leaves a
+    cell blank (e.g. same date as the row above), inherit that value from the nearest row above
+    that has it filled in.
+
+    STEP 3 — BUILD GROUPS: A "group" = one distinct travel pattern (one cab / one set of guests
+    with identical conditions). Each group needs these flat string fields: booked_by, guest_name,
+    cab_type, cab_number (blank if not given), mob_no (the GUEST's number, not the sender's),
+    duty_type, bill_to, state (infer from city, leave blank if ambiguous), city, special_details.
+
+    Each group needs EITHER of these two shapes for its travel details — pick the ONE that
+    actually matches the email (do not use both in the same group):
+
+    SHAPE 1 — "date_ranges" + "legs" — use ONLY for a genuine RECURRING DAILY pattern, where
+    the exact same pickup(s)/drop(s) repeat on EVERY single day of a continuous date range
+    (e.g. "pick me up every morning at 9AM and drop me back every evening at 6:30PM while I'm
+    here from the 22nd to the 24th"). In this shape:
+    - "date_ranges": list of {"start_date","end_date"} in "DD-MMM-YYYY" format. A single date is
+      a range where start=end. "X till Y" is one range. Multiple such ranges in the email = one
+      object per range, in order. Use {current_date} to resolve relative dates. Do NOT
+      enumerate individual calendar dates yourself — a separate system expands ranges into days.
+    - "legs": list of {"pickup_time","pickup_point","drop_point"} that apply on EVERY date above.
+      If there's a morning pickup to a destination AND a separate evening pickup returning to
+      the original address, that's TWO legs — morning first, evening/return leg second.
+
+    SHAPE 2 — "trips" — use whenever the pickup/drop details are DIFFERENT for different dates,
+    or the dates are NOT a continuous daily-repeating pattern. This is the correct shape for:
+    - A single round trip where the outbound leg is on one date and the return leg is on a
+      LATER, separate date (e.g. depart 2nd August, return 5th August — these are NOT the same
+      legs repeating every day between the 2nd and 5th; the guest is not traveling on the 3rd
+      or 4th at all).
+    - Any set of bookings where each date has its own distinct pickup_time/pickup_point/drop_point
+      that doesn't match the other dates.
+    "trips" is a list of objects, each with its own "date" ("DD-MMM-YYYY"), "pickup_time",
+    "pickup_point", and "drop_point" — list them in the order they appear in the email. Each
+    trip object becomes exactly ONE booking row — there is no multiplying across dates here.
+
+    RULE OF THUMB: if you are not 100% sure the SAME legs repeat on EVERY day in between two
+    dates, use SHAPE 2 ("trips") instead of SHAPE 1. When in doubt, prefer "trips" — it never
+    over-generates bookings, while incorrectly using "date_ranges"+"legs" can silently create
+    extra bookings that were never requested.
+
+    STEP 4 — GROUP GUESTS CORRECTLY (apply in this order):
+    a) Same pickup + drop + date + time, and only ONE cab requested → merge into one group,
+       guest_name = "[first guest] +[N] more".
+    b) Email explicitly asks for MORE THAN ONE cab (e.g. "need 2 cabs", "Cab 1 / Cab 2") → one
+       separate group PER CAB, even if pickup/drop/date/time are otherwise identical. If seating
+       per cab isn't specified, split guests evenly and note in special_details: "Guests split
+       evenly across N cabs; exact seating not specified in email."
+    c) If guests differ in pickup, drop, date, OR time from each other, they are NEVER merged
+       under rule (a) — give each distinct combination its own group, even within the same email.
+
+    EXAMPLE (illustrates date_ranges/legs shape, guest merge, and multi-cab split together):
+
+    Input: "Rahul, Priya & Amit — pickup 9AM Terminal 3, drop Cyber Hub, 15-Aug-2026, 1 cab" AND
+    separately "6 guests, pickup 10AM Hotel Leela, drop Airport, 20-Aug-2026, need 2 cabs, seating not specified":
+
+    [
+      {
+        "is_cab_booking": true, "guest_name": "Rahul +2 more", "cab_type": "Sedan",
+        "date_ranges": [{"start_date": "15-Aug-2026", "end_date": "15-Aug-2026"}],
+        "legs": [{"pickup_time": "09:00 AM", "pickup_point": "Terminal 3", "drop_point": "Cyber Hub, Gurugram"}],
+        "special_details": "", "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "", "bill_to": "", "state": "", "city": ""
+      },
+      {
+        "is_cab_booking": true, "guest_name": "Guest Group 1 (3 guests)", "cab_type": "Sedan",
+        "date_ranges": [{"start_date": "20-Aug-2026", "end_date": "20-Aug-2026"}],
+        "legs": [{"pickup_time": "10:00 AM", "pickup_point": "Hotel Leela", "drop_point": "Airport"}],
+        "special_details": "Guests split evenly across 2 cabs; exact seating not specified in email.",
+        "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "", "bill_to": "", "state": "", "city": ""
+      },
+      {
+        "is_cab_booking": true, "guest_name": "Guest Group 2 (3 guests)", "cab_type": "Sedan",
+        "date_ranges": [{"start_date": "20-Aug-2026", "end_date": "20-Aug-2026"}],
+        "legs": [{"pickup_time": "10:00 AM", "pickup_point": "Hotel Leela", "drop_point": "Airport"}],
+        "special_details": "Guests split evenly across 2 cabs; exact seating not specified in email.",
+        "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "", "bill_to": "", "state": "", "city": ""
+      }
+    ]
+
+    EXAMPLE 2 (illustrates the "trips" shape — round trip on two SEPARATE, non-recurring dates):
+
+    Input: "Date-2nd August 2026, Pick Up Time 07:00 PM, First Pick Up Door No 166 B Block Sector
+    52 Noida, First Drop Delhi Airport T3. Date-5th August 2026, Pick Up Time 08:15 PM, Pick Up
+    Address Delhi Airport T3, Drop Door No 166 B Block Sector 52 Noida." This is ONE round trip,
+    not a daily commute — use "trips", NOT "date_ranges"+"legs":
+
+    [
+      {
+        "is_cab_booking": true, "guest_name": "Mr. Sivakumar S", "cab_type": "Sedan",
+        "trips": [
+          {"date": "02-Aug-2026", "pickup_time": "07:00 PM", "pickup_point": "Door No: 166, B Block, Sector 52, Noida", "drop_point": "Delhi Airport T3"},
+          {"date": "05-Aug-2026", "pickup_time": "08:15 PM", "pickup_point": "Delhi Airport T3", "drop_point": "Door No: 166, B Block, Sector 52, Noida"}
+        ],
+        "special_details": "", "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "pick up and drop", "bill_to": "", "state": "", "city": ""
+      }
+    ]
+
+    Return ONLY a raw JSON array (no markdown, no ```json fences). Start with [ and end with ].
   expected_output: >
-    A valid JSON Array containing one or more objects with the extracted data and the "is_cab_booking" boolean.
+    A raw, valid JSON Array of group objects with "is_cab_booking", the common guest/booking
+    fields, and EITHER "date_ranges"+"legs" (recurring daily pattern) OR "trips" (explicit
+    per-date bookings) — never both in the same group — free of any markdown formatting.
   agent: email_parser_agent

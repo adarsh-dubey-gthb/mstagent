@@ -3,7 +3,23 @@ from oauth2client.service_account import ServiceAccountCredentials
 import os
 import time
 
-def append_to_google_sheet(customer_name: str, pickup: str, dropoff: str, date_time: str, booking_creation_time: str, contact_info: str, pickup_type: str, cars_required: str, booked_by: str, special_details: str, billing_to: str, state: str, city: str) -> str:
+def append_to_google_sheet(
+    guest_name: str, 
+    pickup_point: str, 
+    drop_point: str, 
+    pickup_date: str,       # Changed from date_time
+    pickup_time: str,       # Added as separate parameter
+    booking_creation_time: str, 
+    mob_no: str, 
+    duty_type: str, 
+    cab_type: str, 
+    booked_by: str, 
+    bill_to: str, 
+    state: str,
+    city: str,
+    special_details: str,
+    cab_number: str = ""
+) -> str:
     """
     Appends a new booking record to the Google Sheet.
     Requires credentials.json to be present in the directory.
@@ -35,66 +51,65 @@ def append_to_google_sheet(customer_name: str, pickup: str, dropoff: str, date_t
         first_row = sheet.row_values(1)
         if not first_row:
             headers = [
-                "Booking Number",
-                "Booked By",
-                "Customer Name",
-                "Contact Info",
-                "Pickup Date",
-                "Pickup Time",
-                "Booking Creation Time",
-                "Pickup Location",
-                "Drop-off Location",
-                "State",
-                "City",
-                "Pickup Type",
-                "Cars Required",
-                "Special Details",
-                "Billing To"
+                "S No.",
+                "booking creation time",
+                "Booked by",
+                "pickup date",
+                "guest name",
+                "mob no.",
+                "pickup time",
+                "pickup point",
+                "drop point",
+                "cab number",
+                "cab type",
+                "duty type",
+                "bill to",
+                "state",
+                "city",
+                "special details"
             ]
             sheet.append_row(headers)
             time.sleep(1) # Small delay to ensure Google registers the row
         
-        # 4. Generate the next Booking Number based on row count
+        # 4. Generate the next S No. based on row count
         all_records = sheet.get_all_values()
-        booking_number = str(len(all_records)) # If 1 row of headers exists, len is 1, next booking is 1.
+        s_no = str(len(all_records)) # If 1 row of headers exists, len is 1, next booking is 1.
         
-        if booking_number == "0":
-            booking_number = "1"
+        if s_no == "0":
+            s_no = "1"
             
-        # Split date_time into two separate columns (Date and Time)
-        # date_time might be like "5th August 6AM" or "2026-08-05 06:00"
-        # We split on the last space to separate time from date
-        date_time_parts = date_time.strip().rsplit(' ', 1)
-        pickup_date = date_time_parts[0] if len(date_time_parts) > 1 else date_time
-        pickup_time = date_time_parts[1] if len(date_time_parts) > 1 else "Not Given"
+        # FORCE Google Sheets to treat date and time as text by prepending an apostrophe.
+        # This prevents the bug where Sheets turns "09:30 AM" into just "AM".
+        safe_date = f"'{pickup_date}" if pickup_date else ""
+        safe_time = f"'{pickup_time}" if pickup_time else ""
         
         # 5. Append the data in the new column order!
         data = [
-            booking_number,
-            booked_by,
-            customer_name,
-            contact_info,
-            pickup_date,
-            pickup_time,
+            s_no,
             booking_creation_time,
-            pickup,
-            dropoff,
+            booked_by,
+            safe_date,          # Uses the safe text-forced date
+            guest_name,
+            mob_no,
+            safe_time,          # Uses the safe text-forced time
+            pickup_point,
+            drop_point,
+            cab_number,
+            cab_type,
+            duty_type,
+            bill_to,
             state,
             city,
-            pickup_type,
-            cars_required,
-            special_details,
-            billing_to
+            special_details
         ]
         
         # Google Sheets crashes if we try to insert a Python list or dictionary into a single cell.
-        # Sometimes the AI extracts multiple locations as a JSON list, so we must force everything to be a string!
         safe_data = [str(item) if item is not None else "" for item in data]
         
         # Insert at index 2 (Row 2, right below the headers) to keep newest bookings on top!
         sheet.insert_row(safe_data, index=2)
         
-        return f"Successfully saved booking {booking_number} for {customer_name} to Google Sheets!"
+        return f"Successfully saved booking {s_no} for {guest_name} to Google Sheets!"
     except Exception as e:
         return f"CRITICAL ERROR interacting with Google Sheets: {str(e)}"
 
@@ -106,7 +121,7 @@ def get_cloud_uid() -> int:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
         client = gspread.authorize(creds)
-        # SECURITY PATCH: Use exact cryptographic Sheet ID if provided, otherwise fallback to title
+        
         sheet_id = os.getenv("GOOGLE_SHEET_ID")
         if sheet_id:
             workbook = client.open_by_key(sheet_id)
@@ -134,7 +149,7 @@ def set_cloud_uid(uid: int):
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name(credentials_path, scope)
         client = gspread.authorize(creds)
-        # SECURITY PATCH: Use exact cryptographic Sheet ID if provided, otherwise fallback to title
+        
         sheet_id = os.getenv("GOOGLE_SHEET_ID")
         if sheet_id:
             workbook = client.open_by_key(sheet_id)
