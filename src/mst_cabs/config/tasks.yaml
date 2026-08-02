@@ -7,6 +7,11 @@ extract_booking_task:
     booking request, set "is_cab_booking" to false and leave other fields blank. Otherwise
     set it to true and continue.
 
+    NOTE ON PAST DATES: Some emails (especially forwarded threads) mention older bookings
+    from earlier messages, with dates in the past relative to {current_date}. Extract those
+    exactly like any other booking — do NOT skip, filter, or judge whether a date is too old
+    yourself. A separate system automatically filters out past-dated bookings afterward.
+
     STEP 2 — READ THE EMAIL: The email may be plain sentences OR a table (columns separated
     by spaces/tabs/pipes, or an HTML table). If it's a table, read each row by matching cells
     to their column header, not by position. Each row is usually one guest. If a row leaves a
@@ -101,6 +106,32 @@ extract_booking_task:
         "trips": [
           {"date": "02-Aug-2026", "pickup_time": "07:00 PM", "pickup_point": "Door No: 166, B Block, Sector 52, Noida", "drop_point": "Delhi Airport T3"},
           {"date": "05-Aug-2026", "pickup_time": "08:15 PM", "pickup_point": "Delhi Airport T3", "drop_point": "Door No: 166, B Block, Sector 52, Noida"}
+        ],
+        "special_details": "", "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "pick up and drop", "bill_to": "", "state": "", "city": ""
+      }
+    ]
+
+    EXAMPLE 3 (consecutive days that LOOK similar but have a DIFFERENT return leg —
+    use "trips", NOT "date_ranges"+"legs", because the legs are not identical every day):
+
+    Input: "Date-3rd August 2026, Pick Up Time 09:00 AM, Pick Up Address Gulmohar Avenue,
+    Drop at Noida GFL. Evening Pick up 06:00 PM, Drop Off Location Gulmohar Avenue.
+    Date-4th August 2026, Pick Up Time 09:00 AM, Pick Up Address Gulmohar Avenue, Drop at
+    Noida GFL. Afternoon Pick up 03:00 PM, Drop Off Location Delhi Airport T1." Notice Aug 3's
+    evening leg returns to Gulmohar Avenue, but Aug 4's afternoon leg goes to the Airport
+    instead — NOT the same legs repeating, even though both days start the same way. Do NOT
+    combine these into one "date_ranges"+"legs" group (that would wrongly send Aug 4's second
+    leg back to Gulmohar Avenue instead of the Airport). Use "trips" instead, one entry per
+    actual pickup:
+
+    [
+      {
+        "is_cab_booking": true, "guest_name": "Mr. Ankit Kumar", "cab_type": "Sedan",
+        "trips": [
+          {"date": "03-Aug-2026", "pickup_time": "09:00 AM", "pickup_point": "Gulmohar Avenue B-172, Sector 46, Noida", "drop_point": "Noida GFL"},
+          {"date": "03-Aug-2026", "pickup_time": "06:00 PM", "pickup_point": "Noida GFL", "drop_point": "Gulmohar Avenue B-172, Sector 46, Noida"},
+          {"date": "04-Aug-2026", "pickup_time": "09:00 AM", "pickup_point": "Gulmohar Avenue B-172, Sector 46, Noida", "drop_point": "Noida GFL"},
+          {"date": "04-Aug-2026", "pickup_time": "03:00 PM", "pickup_point": "Noida GFL", "drop_point": "Delhi Airport T1"}
         ],
         "special_details": "", "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "pick up and drop", "bill_to": "", "state": "", "city": ""
       }
