@@ -21,14 +21,22 @@ class MstCabsCrew():
     agents_config = 'config/agents.yaml'
     tasks_config = 'config/tasks.yaml'
 
-    # Define the Groq LLM
-    llm = "groq/llama-3.3-70b-versatile"
+    # Groq deprecated llama-3.3-70b-versatile (shutdown by Aug 2026) — migrated to
+    # openai/gpt-oss-120b per Groq's own migration guidance.
+    #
+    # Agent A and Agent B intentionally use DIFFERENT models, not just different agent
+    # instances of the same model. Two copies of the same model tend to make the same
+    # mistakes on the same input — genuine independence requires different model
+    # architectures, so a systematic error in one is less likely to be repeated by the
+    # other, and a real disagreement is more likely to mean something.
+    llm_a = "groq/openai/gpt-oss-120b"
+    llm_b = "groq/openai/gpt-oss-20b"
 
     @agent
     def email_parser_agent(self) -> Agent:
         return Agent(
             config=self.agents_config['email_parser_agent'],
-            llm=self.llm,
+            llm=self.llm_a,
             verbose=True,
             allow_delegation=False
         )
@@ -37,7 +45,7 @@ class MstCabsCrew():
     def email_parser_agent_2(self) -> Agent:
         return Agent(
             config=self.agents_config['email_parser_agent_2'],
-            llm=self.llm,
+            llm=self.llm_b,
             verbose=True,
             allow_delegation=False
         )

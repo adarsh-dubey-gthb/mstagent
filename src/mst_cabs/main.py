@@ -28,6 +28,8 @@ COMPARE_FIELDS = [
     'cab_number', 'mob_no'
 ]
 
+MAX_MISMATCH_RETRIES = 3
+
 
 def _parse_date_flexible(date_str):
     """
@@ -216,6 +218,11 @@ def run_bot():
 
     cab_crew = MstCabsCrew().crew()
 
+    # Tracks how many times each UID has failed due to agent mismatch, so we retry
+    # a bounded number of times instead of either (a) giving up after one try, or
+    # (b) retrying a genuinely ambiguous email forever and burning API calls.
+    mismatch_retry_counts = {}
+
     while True:
         try:
             if check_new_emails():
@@ -226,144 +233,171 @@ def run_bot():
                 if "No new emails found" not in email_text and current_uid != 0:
                     print("\n[+] Waking up BOTH agents to independently parse the email...")
 
-                    # --- NEW FAILOVER LOGIC ---
                     api_keys = [
                         os.getenv("GROQ_API_KEY"),
                         os.getenv("GROQ_API_KEY_2"),
                         os.getenv("GROQ_API_KEY_3")
                     ]
                     valid_keys = [k for k in api_keys if k and k.strip()]
-                    if not valid_keys:
-                        print("[-] ERROR: No GROQ_API_KEY found in .env file!")
-                        continue
 
                     result_obj = None
                     last_exception = None
 
-                    for attempt, key in enumerate(valid_keys):
-                        os.environ["GROQ_API_KEY"] = key
-                        try:
-                            ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
-                            now_str = datetime.now(ist_tz).strftime("%A, %d-%b-%Y at %I:%M %p")
-                            result_obj = cab_crew.kickoff(inputs={
-                                "email_content": email_text,
-                                "current_date": now_str
-                            })
-                            break  # Success! Break out of the fallback loop
-                        except Exception as e:
-                            last_exception = e
-                            print(f"[-] Groq API Key {attempt + 1} failed! Trying backup key if available...")
-                            time.sleep(2)
+                    if not valid_keys:
+                        print("[-] ERROR: No GROQ_API_KEY found in .env file!")
+                    else:
+                        for attempt, key in enumerate(valid_keys):
+                            os.environ["GROQ_API_KEY"] = key
+                            try:
+                                ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+                                now_str = datetime.now(ist_tz).strftime("%A, %d-%b-%Y at %I:%M %p")
+                                result_obj = cab_crew.kickoff(inputs={
+                                    "email_content": email_text,
+                                    "current_date": now_str
+                                })
+                                break  # Success! Break out of the fallback loop
+                            except Exception as e:
+                                last_exception = e
+                                print(f"[-] Groq API Key {attempt + 1} failed! Trying backup key if available...")
+                                time.sleep(2)
 
                     if result_obj is None:
-                        print(f"[-] ALL Groq API Keys failed! Skipping this email for now. Error: {last_exception}")
-                        continue
-
-                    try:
-                        # The crew ran TWO tasks (extract_booking_task_a and _b), each on a
-                        # different independent agent. Pull both raw outputs.
-                        outputs = result_obj.tasks_output
-                        if len(outputs) < 2:
-                            raise Exception(
-                                f"Expected 2 task outputs (two extraction agents), got {len(outputs)}. "
-                                "Check that crew.py defines both extract_booking_task_a and _b."
-                            )
-
-                        raw_a = getattr(outputs[0], 'raw', str(outputs[0]))
-                        raw_b = getattr(outputs[1], 'raw', str(outputs[1]))
-
-                        print("\n[Agent A raw output]\n" + raw_a)
-                        print("\n[Agent B raw output]\n" + raw_b)
-
-                        data_list_a = parse_crew_json(raw_a)
-                        data_list_b = parse_crew_json(raw_b)
-
-                        is_booking_a = data_list_a[0].get("is_cab_booking")
-                        is_booking_b = data_list_b[0].get("is_cab_booking")
-                        a_is_spam = is_booking_a is False or str(is_booking_a).lower() == "false"
-                        b_is_spam = is_booking_b is False or str(is_booking_b).lower() == "false"
-
-                        if a_is_spam and b_is_spam:
-                            print("\n[-] Both agents agree: irrelevant email (spam/newsletter). Skipping.")
-                            set_last_uid(current_uid)
-
-                        elif a_is_spam != b_is_spam:
-                            # The two agents disagree on whether this is even a booking at all —
-                            # definitely not safe to auto-push. Reject and let a human look at it.
-                            print("\n[-] MISMATCH: agents disagree on whether this is a real booking "
-                                  f"(Agent A: {is_booking_a}, Agent B: {is_booking_b}). Rejecting — nothing pushed.")
-                            set_last_uid(current_uid)
-
-                        else:
-                            # Both agents agree it's a real booking — expand and compare details.
-                            expanded_a = expand_bookings(data_list_a)
-                            expanded_b = expand_bookings(data_list_b)
-
-                            if not expanded_a or not expanded_b:
+                        # Deliberately NOT using `continue` here — that would skip past the
+                        # time.sleep(60) at the very end of the outer while loop below, causing
+                        # the bot to hammer the Groq/IMAP APIs with zero delay on repeated
+                        # failures. Falling through naturally preserves the pause.
+                        if valid_keys:
+                            print(f"[-] ALL Groq API Keys failed! Skipping this email for now. Error: {last_exception}")
+                    else:
+                        try:
+                            # The crew ran TWO tasks (extract_booking_task_a and _b), each on a
+                            # different independent agent. Pull both raw outputs.
+                            outputs = result_obj.tasks_output
+                            if len(outputs) < 2:
                                 raise Exception(
-                                    "One or both agents produced 0 bookings after expansion — "
-                                    "likely a date format issue. Check the "
-                                    "'[-] Skipping malformed date range/trip date' lines above."
+                                    f"Expected 2 task outputs (two extraction agents), got {len(outputs)}. "
+                                    "Check that crew.py defines both extract_booking_task_a and _b."
                                 )
 
-                            match, reason = bookings_match(expanded_a, expanded_b)
+                            raw_a = getattr(outputs[0], 'raw', str(outputs[0]))
+                            raw_b = getattr(outputs[1], 'raw', str(outputs[1]))
 
-                            if not match:
-                                print(f"\n[-] MISMATCH between the two agents: {reason}")
-                                print("[-] Rejecting this email — nothing pushed to Google Sheets. "
-                                      "Please review the raw outputs above manually.")
-                                # Mark as processed so it doesn't loop forever. Remove this line
-                                # (and add `continue` instead) if you'd rather the bot keep
-                                # retrying mismatched emails on every poll.
+                            print("\n[Agent A raw output]\n" + raw_a)
+                            print("\n[Agent B raw output]\n" + raw_b)
+
+                            data_list_a = parse_crew_json(raw_a)
+                            data_list_b = parse_crew_json(raw_b)
+
+                            is_booking_a = data_list_a[0].get("is_cab_booking")
+                            is_booking_b = data_list_b[0].get("is_cab_booking")
+                            a_is_spam = is_booking_a is False or str(is_booking_a).lower() == "false"
+                            b_is_spam = is_booking_b is False or str(is_booking_b).lower() == "false"
+
+                            if a_is_spam and b_is_spam:
+                                print("\n[-] Both agents agree: irrelevant email (spam/newsletter). Skipping.")
                                 set_last_uid(current_uid)
+                                mismatch_retry_counts.pop(current_uid, None)
+
+                            elif a_is_spam != b_is_spam:
+                                # The two agents disagree on whether this is even a booking at
+                                # all — definitely not safe to auto-push. Retry a bounded number
+                                # of times before giving up (in case it's just LLM run-to-run
+                                # variance rather than a genuinely ambiguous email).
+                                print("\n[-] MISMATCH: agents disagree on whether this is a real booking "
+                                      f"(Agent A: {is_booking_a}, Agent B: {is_booking_b}).")
+                                mismatch_retry_counts[current_uid] = mismatch_retry_counts.get(current_uid, 0) + 1
+                                attempts = mismatch_retry_counts[current_uid]
+                                if attempts < MAX_MISMATCH_RETRIES:
+                                    print(f"[-] Will retry this email next loop (attempt {attempts}/{MAX_MISMATCH_RETRIES}). "
+                                          "UID NOT advanced — nothing pushed yet.")
+                                    # Deliberately NOT calling set_last_uid() here. Falls through
+                                    # normally (no `continue`) so time.sleep(60) still runs.
+                                else:
+                                    print(f"[-] Gave up after {MAX_MISMATCH_RETRIES} attempts — this email appears "
+                                          "genuinely ambiguous. Marking as processed for MANUAL REVIEW. "
+                                          "Nothing was pushed to Google Sheets.")
+                                    mismatch_retry_counts.pop(current_uid, None)
+                                    set_last_uid(current_uid)
 
                             else:
-                                data_list = expanded_a  # both agree, either one is fine to use
+                                # Both agents agree it's a real booking — expand and compare details.
+                                expanded_a = expand_bookings(data_list_a)
+                                expanded_b = expand_bookings(data_list_b)
 
-                                print(f"\n[+] Both agents AGREE. Found {len(data_list)} distinct booking(s). Pushing to Google Sheets...")
-                                from mst_cabs.tools.google_sheets_tools import append_to_google_sheet
-
-                                ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
-                                booking_creation_time = datetime.now(ist_tz).strftime("%d-%m-%Y %I:%M %p")
-
-                                for i, data in enumerate(data_list):
-                                    print(f"  -> Saving booking {i+1} of {len(data_list)}...")
-                                    save_status = append_to_google_sheet(
-                                        guest_name=flatten_data(data.get('guest_name', '')),
-                                        pickup_point=flatten_data(data.get('pickup_point', '')),
-                                        drop_point=flatten_data(data.get('drop_point', '')),
-                                        pickup_date=flatten_data(data.get('pickup_date', '')),
-                                        booking_creation_time=booking_creation_time,
-                                        mob_no=flatten_data(data.get('mob_no', '')),
-                                        pickup_time=flatten_data(data.get('pickup_time', '')),
-                                        duty_type=flatten_data(data.get('duty_type', '')),
-                                        cab_type=flatten_data(data.get('cab_type', '')),
-                                        booked_by=flatten_data(data.get('booked_by', '')),
-                                        bill_to=flatten_data(data.get('bill_to', '')),
-                                        state=flatten_data(data.get('state', '')),
-                                        city=flatten_data(data.get('city', '')),
-                                        special_details=flatten_data(data.get('special_details', '')),
-                                        cab_number=flatten_data(data.get('cab_number', ''))
+                                if not expanded_a or not expanded_b:
+                                    raise Exception(
+                                        "One or both agents produced 0 bookings after expansion — "
+                                        "likely a date format issue. Check the "
+                                        "'[-] Skipping malformed date range/trip date' lines above."
                                     )
 
-                                    # SAFETY CHECK: If Google Sheets fails, we MUST crash this block!
-                                    if "CRITICAL ERROR" in save_status:
-                                        raise Exception(f"Google Sheets API Error on Booking {i+1}: {save_status}")
+                                match, reason = bookings_match(expanded_a, expanded_b)
 
-                                    print(f"    {save_status}")
+                                if not match:
+                                    print(f"\n[-] MISMATCH between the two agents: {reason}")
+                                    mismatch_retry_counts[current_uid] = mismatch_retry_counts.get(current_uid, 0) + 1
+                                    attempts = mismatch_retry_counts[current_uid]
+                                    if attempts < MAX_MISMATCH_RETRIES:
+                                        print(f"[-] Will retry this email next loop (attempt {attempts}/{MAX_MISMATCH_RETRIES}). "
+                                              "UID NOT advanced — nothing pushed yet.")
+                                        # No set_last_uid(), no `continue` — falls through
+                                        # normally so time.sleep(60) still runs below.
+                                    else:
+                                        print(f"[-] Gave up after {MAX_MISMATCH_RETRIES} attempts — this email "
+                                              "appears genuinely ambiguous. Marking as processed for MANUAL "
+                                              "REVIEW. Please check the raw outputs above manually. "
+                                              "Nothing was pushed.")
+                                        mismatch_retry_counts.pop(current_uid, None)
+                                        set_last_uid(current_uid)
 
-                                    if i < len(data_list) - 1:
-                                        time.sleep(2)
+                                else:
+                                    data_list = expanded_a  # both agree, either one is fine to use
 
-                                # ONLY increase the count if ALL bookings successfully saved!
-                                set_last_uid(current_uid)
-                                print(f"[SUCCESS] Email UID {current_uid} fully processed and marked as complete.")
+                                    print(f"\n[+] Both agents AGREE. Found {len(data_list)} distinct booking(s). Pushing to Google Sheets...")
+                                    from mst_cabs.tools.google_sheets_tools import append_to_google_sheet
 
-                    except Exception as je:
-                        print(f"[-] Failed to parse/compare/push: {je}")
-                        print("[-] Will retry this email on the next loop since it failed.")
+                                    ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+                                    booking_creation_time = datetime.now(ist_tz).strftime("%d-%m-%Y %I:%M %p")
 
-                    print("\n[+] Finished processing block. Going back to sleep...")
+                                    for i, data in enumerate(data_list):
+                                        print(f"  -> Saving booking {i+1} of {len(data_list)}...")
+                                        save_status = append_to_google_sheet(
+                                            guest_name=flatten_data(data.get('guest_name', '')),
+                                            pickup_point=flatten_data(data.get('pickup_point', '')),
+                                            drop_point=flatten_data(data.get('drop_point', '')),
+                                            pickup_date=flatten_data(data.get('pickup_date', '')),
+                                            booking_creation_time=booking_creation_time,
+                                            mob_no=flatten_data(data.get('mob_no', '')),
+                                            pickup_time=flatten_data(data.get('pickup_time', '')),
+                                            duty_type=flatten_data(data.get('duty_type', '')),
+                                            cab_type=flatten_data(data.get('cab_type', '')),
+                                            booked_by=flatten_data(data.get('booked_by', '')),
+                                            bill_to=flatten_data(data.get('bill_to', '')),
+                                            state=flatten_data(data.get('state', '')),
+                                            city=flatten_data(data.get('city', '')),
+                                            special_details=flatten_data(data.get('special_details', '')),
+                                            cab_number=flatten_data(data.get('cab_number', ''))
+                                        )
+
+                                        # SAFETY CHECK: If Google Sheets fails, we MUST crash this block!
+                                        if "CRITICAL ERROR" in save_status:
+                                            raise Exception(f"Google Sheets API Error on Booking {i+1}: {save_status}")
+
+                                        print(f"    {save_status}")
+
+                                        if i < len(data_list) - 1:
+                                            time.sleep(2)
+
+                                    # ONLY increase the count if ALL bookings successfully saved!
+                                    set_last_uid(current_uid)
+                                    mismatch_retry_counts.pop(current_uid, None)
+                                    print(f"[SUCCESS] Email UID {current_uid} fully processed and marked as complete.")
+
+                        except Exception as je:
+                            print(f"[-] Failed to parse/compare/push: {je}")
+                            print("[-] Will retry this email on the next loop since it failed.")
+
+                        print("\n[+] Finished processing block. Going back to sleep...")
             else:
                 pass
 
