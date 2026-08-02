@@ -107,6 +107,8 @@ extract_booking_task:
     ]
 
     Return ONLY a raw JSON array (no markdown, no ```json fences). Start with [ and end with ].
+    Common mistake to avoid: do NOT write dates like "01-08-2026" (numeric month) —
+    always spell out the 3-letter month abbreviation, e.g. "01-Aug-2026".
   expected_output: >
     A raw, valid JSON Array of group objects with "is_cab_booking", the common guest/booking
     fields, and EITHER "date_ranges"+"legs" (recurring daily pattern) OR "trips" (explicit

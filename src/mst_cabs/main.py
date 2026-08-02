@@ -19,6 +19,15 @@ from dotenv import load_dotenv
 from mst_cabs.crew import MstCabsCrew
 from mst_cabs.tools.email_tools import check_new_emails, read_godaddy_emails, set_last_uid
 
+# Fields that actually matter for what gets written to Google Sheets.
+# Two agents' outputs are compared ONLY on these fields — differences in ordering,
+# whitespace, or wording of unrelated internal keys don't count as a mismatch.
+COMPARE_FIELDS = [
+    'guest_name', 'pickup_point', 'drop_point', 'pickup_date', 'pickup_time',
+    'duty_type', 'cab_type', 'booked_by', 'bill_to', 'state', 'city',
+    'cab_number', 'mob_no'
+]
+
 
 def _parse_date_flexible(date_str):
     """
@@ -128,6 +137,74 @@ def expand_bookings(data_list):
     return flat_bookings
 
 
+def flatten_data(value):
+    if value is None or str(value).strip() == "":
+        return "Not Given"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        if not value: return "Not Given"
+        return " | ".join(flatten_data(v) for v in value)
+    if isinstance(value, dict):
+        if not value: return "Not Given"
+        return ", ".join(f"{flatten_data(v)}" for k, v in value.items())
+    return str(value)
+
+
+def parse_crew_json(raw_result):
+    """
+    Parses a single agent's raw text output into a Python list of group dicts.
+    Shared by both agent outputs so the parsing logic only lives in one place.
+    Raises Exception if nothing usable could be parsed.
+    """
+    json_str = raw_result.strip()
+
+    if re.search(r'\[.*\]', json_str, re.DOTALL):
+        json_str = re.search(r'\[.*\]', json_str, re.DOTALL).group(0)
+    elif re.search(r'\{.*\}', json_str, re.DOTALL):
+        json_str = re.search(r'\{.*\}', json_str, re.DOTALL).group(0)
+
+    import json_repair
+    data_list = json_repair.loads(json_str)
+
+    if isinstance(data_list, dict):
+        data_list = [data_list]
+
+    if not data_list:
+        raise Exception("AI returned empty JSON array")
+
+    return data_list
+
+
+def normalize_booking(booking):
+    """
+    Turns one flat booking dict into a normalized, hashable tuple for comparison —
+    trims whitespace and lowercases so trivial formatting differences between the
+    two agents (extra spaces, capitalization) don't count as a real mismatch.
+    """
+    return tuple(
+        flatten_data(booking.get(field, '')).strip().lower()
+        for field in COMPARE_FIELDS
+    )
+
+
+def bookings_match(list_a, list_b):
+    """
+    Compares two expanded booking lists for agreement, ignoring row order.
+    Returns (True, None) if they match, or (False, reason) if not.
+    """
+    if len(list_a) != len(list_b):
+        return False, f"Agent A produced {len(list_a)} booking(s), Agent B produced {len(list_b)} booking(s)."
+
+    norm_a = sorted(normalize_booking(b) for b in list_a)
+    norm_b = sorted(normalize_booking(b) for b in list_b)
+
+    if norm_a != norm_b:
+        return False, "Booking details differ between the two agents (see raw outputs above)."
+
+    return True, None
+
+
 def run_bot():
     """
     Run the background loop that fetches emails and processes them using the crew.
@@ -147,7 +224,7 @@ def run_bot():
                 email_text, current_uid = read_godaddy_emails("ALL")
 
                 if "No new emails found" not in email_text and current_uid != 0:
-                    print("\n[+] Waking up the agent to parse the email...")
+                    print("\n[+] Waking up BOTH agents to independently parse the email...")
 
                     # --- NEW FAILOVER LOGIC ---
                     api_keys = [
@@ -166,7 +243,6 @@ def run_bot():
                     for attempt, key in enumerate(valid_keys):
                         os.environ["GROQ_API_KEY"] = key
                         try:
-                            # Kickoff the process with the email content
                             ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
                             now_str = datetime.now(ist_tz).strftime("%A, %d-%b-%Y at %I:%M %p")
                             result_obj = cab_crew.kickoff(inputs={
@@ -177,113 +253,114 @@ def run_bot():
                         except Exception as e:
                             last_exception = e
                             print(f"[-] Groq API Key {attempt + 1} failed! Trying backup key if available...")
-                            time.sleep(2)  # Short pause before retry
+                            time.sleep(2)
 
                     if result_obj is None:
                         print(f"[-] ALL Groq API Keys failed! Skipping this email for now. Error: {last_exception}")
                         continue
 
-                    result = str(result_obj)
-
                     try:
-                        # Clean up potential markdown formatting like ```json ... ```
-                        json_str = result.strip()
+                        # The crew ran TWO tasks (extract_booking_task_a and _b), each on a
+                        # different independent agent. Pull both raw outputs.
+                        outputs = result_obj.tasks_output
+                        if len(outputs) < 2:
+                            raise Exception(
+                                f"Expected 2 task outputs (two extraction agents), got {len(outputs)}. "
+                                "Check that crew.py defines both extract_booking_task_a and _b."
+                            )
 
-                        # extract_booking_task returns a raw JSON ARRAY of group objects.
-                        if re.search(r'\[.*\]', json_str, re.DOTALL):
-                            json_str = re.search(r'\[.*\]', json_str, re.DOTALL).group(0)
-                        elif re.search(r'\{.*\}', json_str, re.DOTALL):
-                            json_str = re.search(r'\{.*\}', json_str, re.DOTALL).group(0)
+                        raw_a = getattr(outputs[0], 'raw', str(outputs[0]))
+                        raw_b = getattr(outputs[1], 'raw', str(outputs[1]))
 
-                        import json_repair
-                        data_list = json_repair.loads(json_str)
+                        print("\n[Agent A raw output]\n" + raw_a)
+                        print("\n[Agent B raw output]\n" + raw_b)
 
-                        # Fallback: if AI disobeyed and returned a single dict instead of a list, wrap it
-                        if isinstance(data_list, dict):
-                            data_list = [data_list]
+                        data_list_a = parse_crew_json(raw_a)
+                        data_list_b = parse_crew_json(raw_b)
 
-                        if not data_list:
-                            raise Exception("AI returned empty JSON array")
+                        is_booking_a = data_list_a[0].get("is_cab_booking")
+                        is_booking_b = data_list_b[0].get("is_cab_booking")
+                        a_is_spam = is_booking_a is False or str(is_booking_a).lower() == "false"
+                        b_is_spam = is_booking_b is False or str(is_booking_b).lower() == "false"
 
-                        # Check the strict boolean spam filter on the first object
-                        is_booking = data_list[0].get("is_cab_booking")
+                        if a_is_spam and b_is_spam:
+                            print("\n[-] Both agents agree: irrelevant email (spam/newsletter). Skipping.")
+                            set_last_uid(current_uid)
 
-                        if is_booking is False or str(is_booking).lower() == "false":
-                            print("\n[-] Irrelevant email skipped (AI marked it as spam/newsletter).")
-                            set_last_uid(current_uid)  # Mark as successfully processed (spam)
+                        elif a_is_spam != b_is_spam:
+                            # The two agents disagree on whether this is even a booking at all —
+                            # definitely not safe to auto-push. Reject and let a human look at it.
+                            print("\n[-] MISMATCH: agents disagree on whether this is a real booking "
+                                  f"(Agent A: {is_booking_a}, Agent B: {is_booking_b}). Rejecting — nothing pushed.")
+                            set_last_uid(current_uid)
 
                         else:
-                            # Expand date_ranges + legs into individual flat bookings
-                            # (one row per day per leg, morning leg before evening leg)
-                            data_list = expand_bookings(data_list)
+                            # Both agents agree it's a real booking — expand and compare details.
+                            expanded_a = expand_bookings(data_list_a)
+                            expanded_b = expand_bookings(data_list_b)
 
-                            # SAFETY CHECK: if expansion produced nothing (e.g. every date
-                            # range failed to parse), do NOT mark this email as successfully
-                            # processed — raise so it's retried and logged as a real failure.
-                            if not data_list:
+                            if not expanded_a or not expanded_b:
                                 raise Exception(
-                                    "expand_bookings() produced 0 bookings — likely a date "
-                                    "format the parser doesn't recognize. Check the "
-                                    "'[-] Skipping malformed date range' lines above."
+                                    "One or both agents produced 0 bookings after expansion — "
+                                    "likely a date format issue. Check the "
+                                    "'[-] Skipping malformed date range/trip date' lines above."
                                 )
 
-                            print(f"\n[+] Extraction successful! Found {len(data_list)} distinct booking(s). Pushing to Google Sheets...")
-                            from mst_cabs.tools.google_sheets_tools import append_to_google_sheet
+                            match, reason = bookings_match(expanded_a, expanded_b)
 
-                            # Cloud servers usually run on UTC time. We MUST force it to Indian Standard Time (IST)
-                            # so your client doesn't get confused by bookings showing up 5.5 hours in the past!
-                            ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
-                            booking_creation_time = datetime.now(ist_tz).strftime("%d-%m-%Y %I:%M %p")
+                            if not match:
+                                print(f"\n[-] MISMATCH between the two agents: {reason}")
+                                print("[-] Rejecting this email — nothing pushed to Google Sheets. "
+                                      "Please review the raw outputs above manually.")
+                                # Mark as processed so it doesn't loop forever. Remove this line
+                                # (and add `continue` instead) if you'd rather the bot keep
+                                # retrying mismatched emails on every poll.
+                                set_last_uid(current_uid)
 
-                            def flatten_data(value):
-                                if value is None or str(value).strip() == "":
-                                    return "Not Given"
-                                if isinstance(value, str):
-                                    return value
-                                if isinstance(value, list):
-                                    if not value: return "Not Given"
-                                    return " | ".join(flatten_data(v) for v in value)
-                                if isinstance(value, dict):
-                                    if not value: return "Not Given"
-                                    return ", ".join(f"{flatten_data(v)}" for k, v in value.items())
-                                return str(value)
+                            else:
+                                data_list = expanded_a  # both agree, either one is fine to use
 
-                            for i, data in enumerate(data_list):
-                                print(f"  -> Saving booking {i+1} of {len(data_list)}...")
-                                save_status = append_to_google_sheet(
-                                    guest_name=flatten_data(data.get('guest_name', '')),
-                                    pickup_point=flatten_data(data.get('pickup_point', '')),
-                                    drop_point=flatten_data(data.get('drop_point', '')),
-                                    pickup_date=flatten_data(data.get('pickup_date', '')),
-                                    booking_creation_time=booking_creation_time,
-                                    mob_no=flatten_data(data.get('mob_no', '')),
-                                    pickup_time=flatten_data(data.get('pickup_time', '')),
-                                    duty_type=flatten_data(data.get('duty_type', '')),
-                                    cab_type=flatten_data(data.get('cab_type', '')),
-                                    booked_by=flatten_data(data.get('booked_by', '')),
-                                    bill_to=flatten_data(data.get('bill_to', '')),
-                                    state=flatten_data(data.get('state', '')),
-                                    city=flatten_data(data.get('city', '')),
-                                    special_details=flatten_data(data.get('special_details', '')),
-                                    cab_number=flatten_data(data.get('cab_number', ''))
-                                )
+                                print(f"\n[+] Both agents AGREE. Found {len(data_list)} distinct booking(s). Pushing to Google Sheets...")
+                                from mst_cabs.tools.google_sheets_tools import append_to_google_sheet
 
-                                # SAFETY CHECK: If Google Sheets fails, we MUST crash this block!
-                                if "CRITICAL ERROR" in save_status:
-                                    raise Exception(f"Google Sheets API Error on Booking {i+1}: {save_status}")
+                                ist_tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+                                booking_creation_time = datetime.now(ist_tz).strftime("%d-%m-%Y %I:%M %p")
 
-                                print(f"    {save_status}")
+                                for i, data in enumerate(data_list):
+                                    print(f"  -> Saving booking {i+1} of {len(data_list)}...")
+                                    save_status = append_to_google_sheet(
+                                        guest_name=flatten_data(data.get('guest_name', '')),
+                                        pickup_point=flatten_data(data.get('pickup_point', '')),
+                                        drop_point=flatten_data(data.get('drop_point', '')),
+                                        pickup_date=flatten_data(data.get('pickup_date', '')),
+                                        booking_creation_time=booking_creation_time,
+                                        mob_no=flatten_data(data.get('mob_no', '')),
+                                        pickup_time=flatten_data(data.get('pickup_time', '')),
+                                        duty_type=flatten_data(data.get('duty_type', '')),
+                                        cab_type=flatten_data(data.get('cab_type', '')),
+                                        booked_by=flatten_data(data.get('booked_by', '')),
+                                        bill_to=flatten_data(data.get('bill_to', '')),
+                                        state=flatten_data(data.get('state', '')),
+                                        city=flatten_data(data.get('city', '')),
+                                        special_details=flatten_data(data.get('special_details', '')),
+                                        cab_number=flatten_data(data.get('cab_number', ''))
+                                    )
 
-                                # If there are more bookings in the array, wait 2 seconds to avoid API rate limits
-                                if i < len(data_list) - 1:
-                                    time.sleep(2)
+                                    # SAFETY CHECK: If Google Sheets fails, we MUST crash this block!
+                                    if "CRITICAL ERROR" in save_status:
+                                        raise Exception(f"Google Sheets API Error on Booking {i+1}: {save_status}")
 
-                            # ONLY increase the count if ALL bookings successfully saved!
-                            set_last_uid(current_uid)
-                            print(f"[SUCCESS] Email UID {current_uid} fully processed and marked as complete.")
+                                    print(f"    {save_status}")
+
+                                    if i < len(data_list) - 1:
+                                        time.sleep(2)
+
+                                # ONLY increase the count if ALL bookings successfully saved!
+                                set_last_uid(current_uid)
+                                print(f"[SUCCESS] Email UID {current_uid} fully processed and marked as complete.")
 
                     except Exception as je:
-                        print(f"[-] Failed to parse JSON or push to Sheets: {je}\nRaw output: {result}")
+                        print(f"[-] Failed to parse/compare/push: {je}")
                         print("[-] Will retry this email on the next loop since it failed.")
 
                     print("\n[+] Finished processing block. Going back to sleep...")
