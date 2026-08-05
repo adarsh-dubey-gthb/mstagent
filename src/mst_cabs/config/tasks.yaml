@@ -79,8 +79,8 @@ extract_booking_task:
     longer required", "not required now", "please disregard", or "drop the booking". If it IS
     a cancellation:
     - Set "is_cab_booking": true (it's a legitimate, relevant email — just not a new booking).
-    - Set "action": "cancel" on that group.
-    - Do NOT write a new booking for it. Instead, provide "cancellation_target": {"date"
+    - .
+    - write a new booking for it with all the details given but this time also write cancelled in special details and also write remove the booking from sheet manually. Instead, provide "cancellation_target": {"date"
       ("DD-MMM-YYYY"), "time" ("HH:MM AM/PM"), "pickup_point", "drop_point", "mob_no"}
       describing EXACTLY the original booking being cancelled. Here is the ONE exception to
       STEP 1's "ignore quoted history" rule: for a cancellation specifically, you MAY look
@@ -103,7 +103,6 @@ extract_booking_task:
     matching cells to their column header, not by position. Each row is usually one guest. If
     a row leaves a cell blank (e.g. same date as the row above), inherit that value from the
     nearest row above that has it filled in.
-
     STEP 5 — BUILD GROUPS: A "group" = one distinct travel pattern (one cab / one set of guests
     with identical conditions). Each group needs these flat string fields: booked_by, guest_name,
     cab_type, cab_number (blank if not given), mob_no (the GUEST's number, not the sender's),
@@ -210,7 +209,7 @@ extract_booking_task:
     combine these into one "date_ranges"+"legs" group (that would wrongly send Aug 4's second
     leg back to Gulmohar Avenue instead of the Airport). Use "trips" instead, one entry per
     actual pickup:
-
+    important note - sometimes the duty_type would be "at disposal", so if you dont see specific duty_type like "pick up and drop" and you found "at disposal" then treat it as duty_type.
     [
       {
         "is_cab_booking": true, "guest_name": "Mr. Ankit Kumar", "cab_type": "Sedan",
@@ -223,7 +222,7 @@ extract_booking_task:
         "special_details": "", "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "pick up and drop", "bill_to": "", "state": "", "city": ""
       }
     ]
-
+    important note - if there is return booking then write " there is a return booking also." in "special_details".
     EXAMPLE 4 (cancellation — relies on quoted original booking for details, produces NO
     new booking, only a cancellation_target):
 

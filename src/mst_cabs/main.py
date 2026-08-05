@@ -28,7 +28,7 @@ COMPARE_FIELDS = [
     'cab_number', 'mob_no'
 ]
 
-MAX_MISMATCH_RETRIES = 3
+MAX_MISMATCH_RETRIES = 5
 
 
 def clean_email_content(raw_text):
