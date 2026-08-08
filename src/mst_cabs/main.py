@@ -36,43 +36,55 @@ def clean_email_content(raw_text):
     Strips boilerplate that adds token bloat but zero booking information:
     - Embedded image placeholders like [cid:image001.png@...]
     - Legal/confidentiality disclaimer paragraphs
+    - Mobile email footers ("Get Outlook for Android", etc.)
+    - IT security warning tags
     - Repeated corporate signature blocks (name, title, company, address, phone,
       email, website, fax) that often appear 2-3x in a forwarded email thread
-
-    This runs on the SAME email content sent to BOTH agents, so it doesn't bias
-    one agent's result vs the other — it just reduces the total token count on
-    every call, which directly reduces rate-limit pressure on long/forwarded emails.
-
-    Deliberately conservative: only strips well-known boilerplate patterns, never
-    touches anything that looks like it could be booking-relevant (dates, times,
-    addresses, names in a "Guest Name -" style line, table rows, etc.).
     """
     text = raw_text
 
     # Remove embedded image content-id placeholders — pure noise, no information.
     text = re.sub(r'\[cid:[^\]]+\]', '', text)
 
-    # Remove disclaimer paragraphs (common corporate boilerplate about
-    # confidentiality). Stops at the next blank line or common thread markers.
+    # Remove mobile footers
+    text = re.sub(r'Get Outlook for (?:Android|iOS)', '', text, flags=re.IGNORECASE)
+
+    # Remove Outlook/Exchange external-sender security tags like {EXTERNAL}, {WARNING}, {CAUTION}.
+    # These are injected by corporate mail servers into the subject/body and would be mistaken
+    # for template variables by CrewAI's template engine, causing a crash.
+    text = re.sub(r'\{[A-Z][A-Z0-9_]*\}', '', text)
+
+    # Remove IT security warning banners injected by mail gateways.
+    # Written without requiring a specific prefix tag (like [WARNING] or {WARNING}) because
+    # after the tag-stripping step above, only the trailing sentence may remain.
     text = re.sub(
-        r'Disclaimer:.*?(?=\n\s*\n|\nFrom:|\nSent:|\Z)',
+        r'(?:\[WARNING\]|\{WARNING\})?:?\s*This email originated from outside[^.]*\.'
+        r'(?:\s*Do not click links[^.]*\.)?',
+        '',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # Remove disclaimer / confidentiality notice paragraphs.
+    # Handles multiple formats:
+    #   "Disclaimer: ..."                   (with colon)
+    #   "CONFIDENTIALITY NOTICE: ..."       (all caps with colon)
+    #   "Confidentiality Notice The info..."  (no colon — Orix India format)
+    #   Appearing inside quotes at end of email body
+    text = re.sub(
+        r'"?\s*(?:Disclaimer|Confidentiality\s+Notice|CONFIDENTIALITY\s+NOTICE)\s*:?.*?(?=\n\s*\n|\nFrom:|\nSent:|\Z)',
         '',
         text,
         flags=re.DOTALL | re.IGNORECASE
     )
 
-    # Collapse a repeated "Thanks & Regards," signature block: name, title,
-    # company, address, phone/email/website/fax lines that follow it. Keeps only
-    # the FIRST occurrence (in case the sender's identity is useful context once)
-    # and strips subsequent repeats from earlier messages in the same thread.
+    # Collapse a repeated "Thanks & Regards," signature block
     signature_pattern = re.compile(
         r'Thanks\s*&\s*Regards,.*?(?=\n\s*\n|\nFrom:|\nSent:|\Z)',
         flags=re.DOTALL | re.IGNORECASE
     )
     matches = list(signature_pattern.finditer(text))
     if len(matches) > 1:
-        # Remove all but the first match, working backwards so earlier match
-        # positions in `text` don't shift.
         for m in reversed(matches[1:]):
             text = text[:m.start()] + text[m.end():]
 
@@ -80,6 +92,34 @@ def clean_email_content(raw_text):
     text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
 
     return text.strip()
+
+
+def parse_rate_limit_wait_time(error_str):
+    """
+    Parses wait duration from messages like:
+      - "Please try again in 42.975s."
+      - "Please try again in 40m39.936s."
+      - "Please try again in 2h15m30s."
+    Returns total seconds as a float (capped at max 120s), or 60.0 default if unparseable.
+    """
+    # Extract only the "try again in ..." phrase to avoid matching org ID substrings (e.g. '77h' in org_01kz...77hra7)
+    match_phrase = re.search(r'(?:please\s+)?try\s+again\s+in\s+([^\.\n]+)', error_str, re.IGNORECASE)
+    target_str = match_phrase.group(1) if match_phrase else error_str
+
+    m_h = re.search(r'(\d+)\s*h', target_str, re.IGNORECASE)
+    m_m = re.search(r'(\d+)\s*m', target_str, re.IGNORECASE)
+    m_s = re.search(r'(\d+(?:\.\d+)?)\s*s', target_str, re.IGNORECASE)
+
+    if m_h or m_m or m_s:
+        hours = float(m_h.group(1)) if m_h else 0.0
+        mins = float(m_m.group(1)) if m_m else 0.0
+        secs = float(m_s.group(1)) if m_s else 0.0
+        calculated = (hours * 3600.0) + (mins * 60.0) + secs + 2.0
+        # Cap at 600s (10 min). TPD errors can ask for 4-10 min waits;
+        # the old 120s cap caused the bot to retry before the window reset.
+        return min(calculated, 600.0)
+
+    return 60.0
 
 
 def _parse_date_flexible(date_str):
@@ -321,6 +361,9 @@ def run_bot():
                     email_text = clean_email_content(email_text)
                     print(f"\n[+] Cleaned email content: {original_length} -> {len(email_text)} characters "
                           f"({original_length - len(email_text)} chars of boilerplate removed)")
+                    print("\n[+] --- CLEANED EMAIL CONTENT SENT TO AGENTS ---")
+                    print(email_text)
+                    print("[+] --- END OF CLEANED EMAIL CONTENT ---\n")
                     print("\n[+] Waking up BOTH agents to independently parse the email...")
 
                     key_a = os.getenv("GROQ_API_KEY")
@@ -346,19 +389,38 @@ def run_bot():
                             last_exception = e
                             error_str = str(e).lower()
                             is_rate_limit = "rate_limit" in error_str or "429" in error_str or "rate limit" in error_str
-                            if is_rate_limit:
+                            # "Request too large" is structurally different from a transient rate
+                            # limit: no matter how long you wait or which API key you use, the
+                            # SAME model will always reject this request because a single request
+                            # already exceeds its per-request token cap.
+                            # Groq's own signal for this is the phrase "reduce your message size".
+                            #
+                            # DO NOT confuse with TPD (tokens per day) errors, which also have
+                            # type:"tokens" in the JSON but are recoverable — they include
+                            # "please try again in Xm" instead of "reduce your message size".
+                            is_too_large = "reduce your message size" in error_str
+
+                            if is_too_large:
+                                print(f"[-] REQUEST TOO LARGE for model: {e}")
+                                print(f"[-] This email exceeds the model's per-request token limit. "
+                                      "Retrying with a backup key won't help (same model, same limit). "
+                                      "Marking email as processed for MANUAL REVIEW.")
+                                set_last_uid(current_uid)
+                                mismatch_retry_counts.pop(current_uid, None)
+                                # Jump to the sleep at the bottom without further processing.
+                                result_obj = None
+                                last_exception = None  # suppress the "ALL attempts failed" print below
+                            elif is_rate_limit:
                                 print(f"[-] Primary keys hit a RATE LIMIT: {e}")
                             else:
                                 print(f"[-] Primary keys failed: {e}")
 
-                            # Backup attempt: if we have a spare 3rd key, retry ONCE using it
-                            # for BOTH agents (temporary — not their normal fixed assignment).
-                            # We swap the env vars that crew.py's @agent methods read from,
-                            # construct a FRESH MstCabsCrew() so the agents pick up the swapped
-                            # keys, then restore the originals immediately after — success or fail.
-                            if key_backup:
-                                print("[-] Retrying once with backup key (GROQ_API_KEY_3) for both agents...")
-                                time.sleep(20 if is_rate_limit else 2)
+                            # Backup attempt: only worthwhile for transient rate limits or other
+                            # non-size errors — NOT for "request too large" (handled above).
+                            if not is_too_large and key_backup:
+                                sleep_time = parse_rate_limit_wait_time(str(e)) if is_rate_limit else 2.0
+                                print(f"[-] Waiting {sleep_time:.1f}s for rate limit window to reset before retrying with backup key (GROQ_API_KEY_3)...")
+                                time.sleep(sleep_time)
                                 os.environ["GROQ_API_KEY"] = key_backup
                                 os.environ["GROQ_API_KEY_2"] = key_backup
                                 try:
@@ -373,7 +435,7 @@ def run_bot():
                                     # using the backup key instead of the intended primary ones.
                                     os.environ["GROQ_API_KEY"] = key_a
                                     os.environ["GROQ_API_KEY_2"] = key_b
-                            else:
+                            elif not is_too_large:
                                 print("[-] No GROQ_API_KEY_3 configured — no backup available for this attempt.")
 
                     if result_obj is None:
@@ -381,8 +443,9 @@ def run_bot():
                         # time.sleep(60) at the very end of the outer while loop below, causing
                         # the bot to hammer the Groq/IMAP APIs with zero delay on repeated
                         # failures. Falling through naturally preserves the pause.
-                        if key_a and key_b:
+                        if key_a and key_b and last_exception is not None:
                             print(f"[-] ALL Groq attempts failed (primary + backup)! Skipping this email for now. Error: {last_exception}")
+
                     else:
                         try:
                             # The crew ran TWO tasks (extract_booking_task_a and _b), each on a

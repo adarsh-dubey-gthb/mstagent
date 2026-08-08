@@ -51,7 +51,7 @@ class MstCabsCrew():
     def email_parser_agent_2(self) -> Agent:
         return Agent(
             config=self.agents_config['email_parser_agent_2'],
-            llm=LLM(model="groq/openai/gpt-oss-20b", api_key=os.getenv("GROQ_API_KEY_2")),
+            llm=LLM(model="groq/openai/gpt-oss-120b", api_key=os.getenv("GROQ_API_KEY_2")),
             verbose=True,
             allow_delegation=False
         )

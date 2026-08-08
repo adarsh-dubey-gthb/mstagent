@@ -3,6 +3,13 @@ extract_booking_task:
     Here is the content of the newest email:
     {email_content}
 
+    CRITICAL RULE — NEVER RETURN AN EMPTY ARRAY: Your output must ALWAYS contain AT LEAST ONE
+    JSON object, no matter what. If you are unsure whether this is a real booking, or the
+    email looks unusual, suspicious, or contains a security warning banner — that is NOT a
+    reason to return nothing. Set "is_cab_booking" to your best judgment (true or false) and
+    return exactly one object reflecting that judgment. An empty array `[]` is ALWAYS wrong
+    and will cause a system failure — never output it under any circumstances.
+
     STEP 1 — READ ONLY THE FRESH MESSAGE (do this FIRST, before anything else): Emails often
     contain a forwarded or replied-to chain with OLDER messages quoted below the newest one.
     You must identify where the fresh message ends and the quoted/forwarded history begins,
@@ -18,54 +25,32 @@ extract_booking_task:
     appearing together (in any order — different email clients arrange these differently).
     Everything from that "From:/To:/Sent:/Subject:" block onward is an OLDER message being
     quoted for context — not a new request. There is often MORE than one such block, nested
-    one after another (message 3, quoted inside message 2, quoted inside message 1) — the
-    same rule applies to all of them: only the very TOP message, above the FIRST such block,
-    is the fresh one you should extract new bookings from.
+    one after another — the same rule applies to all of them: only the very TOP message,
+    above the FIRST such block, is the fresh one you should extract new bookings from.
 
-    ANOTHER STRONG SIGNAL: if you see the same booking-style content repeated with DIFFERENT,
-    EARLIER dates further down the email (e.g. the fresh message asks for a cab on 4th August,
-    but further down a similar-looking request mentions 3rd August, and even further down
-    another mentions 2nd August) — that pattern of decreasing/older dates as you scroll down is
-    a forwarded thread of separate past requests, not one email covering all those dates. Only
-    the topmost (most recent) one is the actual new request.
+    IMPORTANT — DO NOT OVER-APPLY THIS RULE: a "Subject:" line by itself, with NO nearby
+    "From:"/"To:"/"Sent:"/"Date:" lines around it, is NOT enough evidence of quoted history —
+    it could just be a forwarded email's subject line sitting above the actual current
+    content (common on mobile email clients, e.g. a "Fw:" subject followed directly by the
+    real message). Only treat content as quoted history if you can identify the FULL cluster
+    (From AND To AND Sent-or-Date AND Subject all present near each other). If in doubt, do
+    NOT discard content — read it normally.
 
-    EXAMPLE 5 (fresh message + two layers of quoted history — extract ONLY the top one):
-
-    Input:
-    "Dear MST, We require one additional cab on 04/08/2026 at 01:00 PM under the 04hrs/40kms
-    package. Kindly arrange the same and confirm. Warm Regards, Siddharth Kaithwas...
-    From: "FORTUNE PARK EAST DELHI SECURITY" <...>
-    To: "services" <...>
-    Cc: "amit" <...>
-    Sent: Sunday, August 2, 2026 6:22:07 PM
-    Subject: Require one additional cab on 03/08/2026.
-    Dear MST, We require one additional cab on 03/08/2026 at 10:30 AM under the 04hrs/40 km
-    package. Kindly arrange the same and confirm. Warm Regards, Siddharth Kaithwas...
-    From: "FORTUNE PARK EAST DELHI SECURITY" <...>
-    To: "services" <...>
-    Sent: Saturday, August 1, 2026 3:37:52 PM
-    Subject: Re: require one additional cab on 02/08/2026
-    Dear MST, This is to inform you that we require one additional cab on 02/08/2026 at sharp
-    10:30 A.M as per 04Hrs/40kms Package..."
-
-    The FIRST "From:/To:/Cc:/Sent:/Subject:" block appears right after "Siddharth Kaithwas"'s
-    first signature — everything from there onward (both the 03/08/2026 AND 02/08/2026
-    requests, which are themselves nested inside each other the same way) is quoted history.
-    Extract ONLY the fresh 04/08/2026 request:
-
-    [
-      {
-        "is_cab_booking": true, "guest_name": "", "cab_type": "", "cab_number": "",
-        "mob_no": "+91-8800012197", "duty_type": "04hrs/40kms package", "bill_to": "",
-        "state": "", "city": "New Delhi", "special_details": "", "booked_by": "Siddharth Kaithwas",
-        "trips": [
-          {"date": "04-Aug-2026", "pickup_time": "01:00 PM", "pickup_point": "FORTUNE PARK EAST DELHI, Plot D, Community Centre, Vivek Vihar, New Delhi", "drop_point": ""}
-        ]
-      }
-    ]
-
-    Do NOT create separate groups for the 03/08/2026 or 02/08/2026 requests — those are old,
-    already-handled messages quoted for context, not new requests in this email.
+    IMPORTANT — SECURITY WARNING BANNERS ARE NOT SPAM: Many company email systems
+    automatically inject a banner into external emails, e.g. a warning that the email
+    originated from outside the organization, or an "EXTERNAL" tag in the subject line. This
+    is routine IT security boilerplate added automatically by the mail system — it has
+    NOTHING to do with whether the booking request is legitimate. NEVER treat the presence of
+    such a warning banner, by itself, as a reason to mark "is_cab_booking": false. For
+    example, an email like this IS a real booking, not spam, even though it's a short mobile
+    forward with a security banner and no From/To/Sent block around its Subject line:
+        Subject: Fw: EXTERNAL - Cab Booking for Tomorrow pickup
+        Dear business partner, Please check transfer duty. Get Outlook for Android
+        ----
+        Subject: EXTERNAL - Cab Booking for Tomorrow pickup
+        Dear Rajeev, [booking table follows]
+    Judge the actual booking content beneath/around the banner normally — do not let the
+    banner or the "EXTERNAL" tag itself influence "is_cab_booking".
 
     NOTE ON PAST DATES (backup safety net): the rule above should already prevent old quoted
     bookings from being extracted. But if you ever see a clearly historical booking that is
@@ -78,20 +63,23 @@ extract_booking_task:
     an existing booking — look for words like "cancel", "cancelled", "cancellation", "no
     longer required", "not required now", "please disregard", or "drop the booking". If it IS
     a cancellation:
-    - Set "is_cab_booking": true (it's a legitimate, relevant email — just not a new booking).
-    - .
-    - write a new booking for it with all the details given but this time also write cancelled in special details and also write remove the booking from sheet manually. Instead, provide "cancellation_target": {"date"
-      ("DD-MMM-YYYY"), "time" ("HH:MM AM/PM"), "pickup_point", "drop_point", "mob_no"}
-      describing EXACTLY the original booking being cancelled. Here is the ONE exception to
-      STEP 1's "ignore quoted history" rule: for a cancellation specifically, you MAY look
-      into the quoted/forwarded section below the fresh message to find these details, since
-      a cancellation reply often relies on that quoted context to specify which booking it
-      means.
-    - If the email doesn't give enough detail to identify which booking is being cancelled,
-      still set "action": "cancel" but leave the "cancellation_target" fields you can't
-      determine as empty strings rather than guessing.
-    - Skip STEPS 4-6 below entirely for this group — a cancellation group never has
-      "date_ranges", "legs", or "trips".
+    - Set "is_cab_booking": true (it's a legitimate, relevant email).
+    - Set "action": "cancel" on that group.
+    - Extract the ORIGINAL booking's FULL details (guest_name, mob_no, pickup/drop, cab_type,
+      etc.) exactly like a normal booking — using "date_ranges"+"legs" or "trips" per STEPS
+      4-6 below. Use whatever details are given directly in the cancellation message, OR found
+      in a quoted/forwarded original booking message included further down in the same email
+      — a cancellation reply often relies on that quoted context for these details. Here is
+      the ONE exception to STEP 1's "ignore quoted history" rule: for a cancellation
+      specifically, you MAY look into the quoted/forwarded section below the fresh message to
+      find these details.
+    - Set "special_details" to a short plain note that this is a cancellation, e.g.
+      "Guest requested cancellation." (a separate system will also mark it clearly before it
+      reaches the sheet, so exact wording here doesn't need to be precise).
+    - If the email doesn't give enough detail to fill in some fields (e.g. exact pickup
+      address), leave those specific fields blank rather than guessing — but still extract
+      whatever you can identify (especially the date/time, which matters most for finding the
+      right booking to cancel).
     If the fresh message is NOT a cancellation, continue to STEP 3 as normal.
 
     STEP 3 — SPAM CHECK: If the fresh message is a newsletter, spam, internal chatter, or not
@@ -103,12 +91,13 @@ extract_booking_task:
     matching cells to their column header, not by position. Each row is usually one guest. If
     a row leaves a cell blank (e.g. same date as the row above), inherit that value from the
     nearest row above that has it filled in.
+
     STEP 5 — BUILD GROUPS: A "group" = one distinct travel pattern (one cab / one set of guests
     with identical conditions). Each group needs these flat string fields: booked_by, guest_name,
     cab_type, cab_number (blank if not given), mob_no (the GUEST's number, not the sender's),
     duty_type, bill_to, state (infer from city, leave blank if ambiguous), city, special_details.
 
-    Each NEW BOOKING group (i.e. NOT a cancellation) needs EITHER of these two shapes for its
+    Every group (cancellation or normal booking) needs EITHER of these two shapes for its
     travel details — pick the ONE that actually matches the email (do not use both in the same
     group):
 
@@ -129,7 +118,8 @@ extract_booking_task:
     - A single round trip where the outbound leg is on one date and the return leg is on a
       LATER, separate date (e.g. depart 2nd August, return 5th August — these are NOT the same
       legs repeating every day between the 2nd and 5th; the guest is not traveling on the 3rd
-      or 4th at all).
+      or 4th at all). If there is a return leg like this, also note in "special_details":
+      "There is a return booking also."
     - Any set of bookings where each date has its own distinct pickup_time/pickup_point/drop_point
       that doesn't match the other dates.
     "trips" is a list of objects, each with its own "date" ("DD-MMM-YYYY"), "pickup_time",
@@ -140,6 +130,10 @@ extract_booking_task:
     dates, use SHAPE 2 ("trips") instead of SHAPE 1. When in doubt, prefer "trips" — it never
     over-generates bookings, while incorrectly using "date_ranges"+"legs" can silently create
     extra bookings that were never requested.
+
+    DUTY TYPE NOTE: if the email doesn't state a specific duty type like "pick up and drop",
+    but instead says "at disposal", use "at disposal" as the duty_type — don't leave it blank
+    or guess a different value when the email already told you what it is.
 
     STEP 6 — GROUP GUESTS CORRECTLY for new bookings (apply in this order):
     a) Same pickup + drop + date + time, and only ONE cab requested → merge into one group,
@@ -193,7 +187,7 @@ extract_booking_task:
           {"date": "02-Aug-2026", "pickup_time": "07:00 PM", "pickup_point": "Door No: 166, B Block, Sector 52, Noida", "drop_point": "Delhi Airport T3"},
           {"date": "05-Aug-2026", "pickup_time": "08:15 PM", "pickup_point": "Delhi Airport T3", "drop_point": "Door No: 166, B Block, Sector 52, Noida"}
         ],
-        "special_details": "", "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "pick up and drop", "bill_to": "", "state": "", "city": ""
+        "special_details": "There is a return booking also.", "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "pick up and drop", "bill_to": "", "state": "", "city": ""
       }
     ]
 
@@ -209,7 +203,7 @@ extract_booking_task:
     combine these into one "date_ranges"+"legs" group (that would wrongly send Aug 4's second
     leg back to Gulmohar Avenue instead of the Airport). Use "trips" instead, one entry per
     actual pickup:
-    important note - sometimes the duty_type would be "at disposal", so if you dont see specific duty_type like "pick up and drop" and you found "at disposal" then treat it as duty_type.
+
     [
       {
         "is_cab_booking": true, "guest_name": "Mr. Ankit Kumar", "cab_type": "Sedan",
@@ -222,24 +216,24 @@ extract_booking_task:
         "special_details": "", "booked_by": "", "cab_number": "", "mob_no": "", "duty_type": "pick up and drop", "bill_to": "", "state": "", "city": ""
       }
     ]
-    important note - if there is return booking then write " there is a return booking also." in "special_details".
-    EXAMPLE 4 (cancellation — relies on quoted original booking for details, produces NO
-    new booking, only a cancellation_target):
+
+    EXAMPLE 4 (cancellation — extracts the FULL original booking, just flagged, not a
+    stripped-down target — relies on quoted original booking for details):
 
     Input: "Please cancel the booking below, no longer required. Thanks. [quoted original
-    message below] Date-4th August 2026, Pick Up Time 09:00 AM, Pick Up Address Gulmohar
-    Avenue, Drop at Noida GFL." This is a cancellation, using the quoted message to identify
-    which booking:
+    message below] Guest Name - Mr. Ramesh Iyer, Contact - 9876543210, Date-4th August 2026,
+    Pick Up Time 09:00 AM, Pick Up Address Gulmohar Avenue, Drop at Noida GFL, Cab Type -
+    Sedan." This is a cancellation, using the quoted message to fill in the full details:
 
     [
       {
-        "is_cab_booking": true, "action": "cancel",
-        "cancellation_target": {
-          "date": "04-Aug-2026", "time": "09:00 AM",
-          "pickup_point": "Gulmohar Avenue", "drop_point": "Noida GFL", "mob_no": ""
-        },
-        "guest_name": "", "cab_type": "", "cab_number": "", "mob_no": "", "duty_type": "",
-        "bill_to": "", "state": "", "city": "", "special_details": "", "booked_by": ""
+        "is_cab_booking": true, "action": "cancel", "guest_name": "Mr. Ramesh Iyer",
+        "mob_no": "9876543210", "cab_type": "Sedan",
+        "trips": [
+          {"date": "04-Aug-2026", "pickup_time": "09:00 AM", "pickup_point": "Gulmohar Avenue", "drop_point": "Noida GFL"}
+        ],
+        "special_details": "Guest requested cancellation.",
+        "cab_number": "", "duty_type": "", "bill_to": "", "state": "", "city": "", "booked_by": ""
       }
     ]
 
@@ -247,9 +241,8 @@ extract_booking_task:
   expected_output: >
     A raw, valid JSON Array of group objects with "is_cab_booking" and the common guest/
     booking fields, extracted ONLY from the fresh message (ignoring quoted/forwarded history
-    per STEP 1, except when needed to identify a cancellation target per STEP 2). Each group
-    is EITHER a new booking — using "date_ranges"+"legs" (recurring daily pattern) OR "trips"
-    (explicit per-date bookings), never both — OR a cancellation, marked with "action":
-    "cancel" and a "cancellation_target" object instead (no date_ranges/legs/trips in that
-    case). Free of any markdown formatting.
+    per STEP 1, except when needed for a cancellation per STEP 2). Every group — cancellation
+    or normal booking — uses EITHER "date_ranges"+"legs" (recurring daily pattern) OR "trips"
+    (explicit per-date bookings), never both. Cancellation groups are additionally marked with
+    "action": "cancel". Free of any markdown formatting.
   agent: email_parser_agent
