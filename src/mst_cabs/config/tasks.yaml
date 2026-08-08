@@ -44,6 +44,7 @@ extract_booking_task:
     such a warning banner, by itself, as a reason to mark "is_cab_booking": false. For
     example, an email like this IS a real booking, not spam, even though it's a short mobile
     forward with a security banner and no From/To/Sent block around its Subject line:
+    so in this case "is_cab_booking" will always "true"
         Subject: Fw: EXTERNAL - Cab Booking for Tomorrow pickup
         Dear business partner, Please check transfer duty. Get Outlook for Android
         ----
