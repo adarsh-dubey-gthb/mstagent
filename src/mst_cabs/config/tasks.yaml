@@ -9,7 +9,7 @@ extract_booking_task:
     reason to return nothing. Set "is_cab_booking" to your best judgment (true or false) and
     return exactly one object reflecting that judgment. An empty array `[]` is ALWAYS wrong
     and will cause a system failure — never output it under any circumstances.
-
+    
     STEP 1 — READ ONLY THE FRESH MESSAGE (do this FIRST, before anything else): Emails often
     contain a forwarded or replied-to chain with OLDER messages quoted below the newest one.
     You must identify where the fresh message ends and the quoted/forwarded history begins,
@@ -147,6 +147,8 @@ extract_booking_task:
        evenly across N cabs; exact seating not specified in email."
     c) If guests differ in pickup, drop, date, OR time from each other, they are NEVER merged
        under rule (a) — give each distinct combination its own group, even within the same email.
+
+    IMPORTANT NOTE - sender name or "booked_by" should not be empty in any case , if it is empty then again double check it , if you again do not find sender name then fill it with the mail name .
 
     EXAMPLE 1 (illustrates date_ranges/legs shape, guest merge, and multi-cab split together):
 
