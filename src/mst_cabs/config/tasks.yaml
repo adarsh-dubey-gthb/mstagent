@@ -36,7 +36,7 @@ extract_booking_task:
     (From AND To AND Sent-or-Date AND Subject all present near each other). If in doubt, do
     NOT discard content — read it normally.
 
-    IMPORTANT — SECURITY WARNING BANNERS ARE NOT SPAM: Many company email systems
+    VERY IMPORTANT — SECURITY WARNING BANNERS ARE NOT SPAM: Many company email systems
     automatically inject a banner into external emails, e.g. a warning that the email
     originated from outside the organization, or an "EXTERNAL" tag in the subject line. This
     is routine IT security boilerplate added automatically by the mail system — it has
@@ -54,7 +54,7 @@ extract_booking_task:
       Please book Good Car as per the details given below:
     Judge the actual booking content beneath/around the banner normally — do not let the
     banner or the "EXTERNAL" tag itself influence "is_cab_booking".
-
+    Most IMPORTANT note - You can think the mail get from Rajiv Chauhan is not a booking but it is a real booking so never skipp it .
     NOTE ON PAST DATES (backup safety net): the rule above should already prevent old quoted
     bookings from being extracted. But if you ever see a clearly historical booking that is
     NOT inside an identifiable quote-header block (a rare edge case), extract it anyway rather
