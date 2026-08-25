@@ -76,9 +76,7 @@ extract_booking_task:
       the ONE exception to STEP 1's "ignore quoted history" rule: for a cancellation
       specifically, you MAY look into the quoted/forwarded section below the fresh message to
       find these details.
-    - Set "special_details" to a short plain note that this is a cancellation, e.g.
-      "Guest requested cancellation." (a separate system will also mark it clearly before it
-      reaches the sheet, so exact wording here doesn't need to be precise).
+    - Set "special_details" to "Guest request cancellation check manually".
     - If the email doesn't give enough detail to fill in some fields (e.g. exact pickup
       address), leave those specific fields blank rather than guessing — but still extract
       whatever you can identify (especially the date/time, which matters most for finding the
@@ -237,7 +235,7 @@ extract_booking_task:
         "trips": [
           {"date": "04-Aug-2026", "pickup_time": "09:00 AM", "pickup_point": "Gulmohar Avenue", "drop_point": "Noida GFL"}
         ],
-        "special_details": "Guest requested cancellation.",
+        "special_details": "Guest request cancellation check manually",
         "cab_number": "", "duty_type": "", "bill_to": "", "state": "", "city": "", "booked_by": ""
       }
     ]
