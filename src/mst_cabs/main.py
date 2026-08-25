@@ -25,7 +25,7 @@ from mst_cabs.tools.email_tools import check_new_emails, read_godaddy_emails, se
 COMPARE_FIELDS = [
     'guest_name', 'pickup_point', 'drop_point', 'pickup_date', 'pickup_time',
     'duty_type', 'cab_type', 'booked_by', 'bill_to', 'state', 'city',
-    'cab_number', 'mob_no'
+    'cab_number', 'mob_no', 'action'
 ]
 
 MAX_MISMATCH_RETRIES = 5
@@ -311,7 +311,7 @@ def normalize_booking(booking):
     two agents (extra spaces, capitalization) don't count as a real mismatch.
     """
     return tuple(
-        flatten_data(booking.get(field, '')).strip().lower()
+        flatten_data(booking.get(field, 'book' if field == 'action' else '')).strip().lower()
         for field in COMPARE_FIELDS
     )
 
@@ -567,42 +567,65 @@ def run_bot():
                                     else:
                                         data_list = expanded_a  # both agree, either one is fine to use
 
-                                        print(f"\n[+] Both agents AGREE. Found {len(data_list)} distinct upcoming "
-                                              f"booking(s). Pushing to Google Sheets...")
-                                        from mst_cabs.tools.google_sheets_tools import append_to_google_sheet
+                                        print(f"\n[+] Both agents AGREE. Found {len(data_list)} distinct item(s). Pushing to Google Sheets...")
+                                        from mst_cabs.tools.google_sheets_tools import append_to_google_sheet, cancel_booking_in_google_sheet
 
-                                        booking_creation_time = datetime.now(ist_tz).strftime("%d-%m-%Y %I:%M %p")
+                                        current_timestamp = datetime.now(ist_tz).strftime("%d-%m-%Y %I:%M %p")
 
                                         for i, data in enumerate(data_list):
-                                            print(f"  -> Saving booking {i+1} of {len(data_list)}...")
-                                            save_status = append_to_google_sheet(
-                                                guest_name=flatten_data(data.get('guest_name', '')),
-                                                pickup_point=flatten_data(data.get('pickup_point', '')),
-                                                drop_point=flatten_data(data.get('drop_point', '')),
-                                                pickup_date=flatten_data(data.get('pickup_date', '')),
-                                                booking_creation_time=booking_creation_time,
-                                                mob_no=flatten_data(data.get('mob_no', '')),
-                                                pickup_time=flatten_data(data.get('pickup_time', '')),
-                                                duty_type=flatten_data(data.get('duty_type', '')),
-                                                cab_type=flatten_data(data.get('cab_type', '')),
-                                                booked_by=flatten_data(data.get('booked_by', '')),
-                                                bill_to=flatten_data(data.get('bill_to', '')),
-                                                state=flatten_data(data.get('state', '')),
-                                                city=flatten_data(data.get('city', '')),
-                                                special_details=flatten_data(data.get('special_details', '')),
-                                                cab_number=flatten_data(data.get('cab_number', ''))
-                                            )
+                                            action = str(data.get('action', '')).strip().lower()
+                                            special_details = flatten_data(data.get('special_details', ''))
+                                            is_cancellation = (action == 'cancel') or ('cancellation' in special_details.lower()) or ('cancel' in special_details.lower())
+
+                                            if is_cancellation:
+                                                print(f"  -> Processing CANCELLATION {i+1} of {len(data_list)} for {data.get('guest_name', '')}...")
+                                                save_status = cancel_booking_in_google_sheet(
+                                                    guest_name=flatten_data(data.get('guest_name', '')),
+                                                    pickup_date=flatten_data(data.get('pickup_date', '')),
+                                                    pickup_time=flatten_data(data.get('pickup_time', '')),
+                                                    pickup_point=flatten_data(data.get('pickup_point', '')),
+                                                    drop_point=flatten_data(data.get('drop_point', '')),
+                                                    cancellation_time=current_timestamp,
+                                                    mob_no=flatten_data(data.get('mob_no', '')),
+                                                    booked_by=flatten_data(data.get('booked_by', '')),
+                                                    special_details=special_details,
+                                                    duty_type=flatten_data(data.get('duty_type', '')),
+                                                    cab_type=flatten_data(data.get('cab_type', '')),
+                                                    bill_to=flatten_data(data.get('bill_to', '')),
+                                                    state=flatten_data(data.get('state', '')),
+                                                    city=flatten_data(data.get('city', '')),
+                                                    cab_number=flatten_data(data.get('cab_number', ''))
+                                                )
+                                            else:
+                                                print(f"  -> Saving booking {i+1} of {len(data_list)}...")
+                                                save_status = append_to_google_sheet(
+                                                    guest_name=flatten_data(data.get('guest_name', '')),
+                                                    pickup_point=flatten_data(data.get('pickup_point', '')),
+                                                    drop_point=flatten_data(data.get('drop_point', '')),
+                                                    pickup_date=flatten_data(data.get('pickup_date', '')),
+                                                    booking_creation_time=current_timestamp,
+                                                    mob_no=flatten_data(data.get('mob_no', '')),
+                                                    pickup_time=flatten_data(data.get('pickup_time', '')),
+                                                    duty_type=flatten_data(data.get('duty_type', '')),
+                                                    cab_type=flatten_data(data.get('cab_type', '')),
+                                                    booked_by=flatten_data(data.get('booked_by', '')),
+                                                    bill_to=flatten_data(data.get('bill_to', '')),
+                                                    state=flatten_data(data.get('state', '')),
+                                                    city=flatten_data(data.get('city', '')),
+                                                    special_details=special_details,
+                                                    cab_number=flatten_data(data.get('cab_number', ''))
+                                                )
 
                                             # SAFETY CHECK: If Google Sheets fails, we MUST crash this block!
                                             if "CRITICAL ERROR" in save_status:
-                                                raise Exception(f"Google Sheets API Error on Booking {i+1}: {save_status}")
+                                                raise Exception(f"Google Sheets API Error on Item {i+1}: {save_status}")
 
                                             print(f"    {save_status}")
 
                                             if i < len(data_list) - 1:
                                                 time.sleep(2)
 
-                                        # ONLY increase the count if ALL bookings successfully saved!
+                                        # ONLY increase the count if ALL bookings successfully saved/cancelled!
                                         set_last_uid(current_uid)
                                         mismatch_retry_counts.pop(current_uid, None)
                                         print(f"[SUCCESS] Email UID {current_uid} fully processed and marked as complete.")
