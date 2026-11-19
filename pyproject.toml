@@ -2,7 +2,7 @@
 name = "mst_cabs"
 version = "0.1.0"
 description = "Cab Booking Agent powered by CrewAI"
-authors = ["Your Name <you@example.com>"]
+
 
 [tool.poetry.dependencies]
 python = ">=3.10,<=3.13"
